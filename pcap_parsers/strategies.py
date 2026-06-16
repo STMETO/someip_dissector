@@ -1,13 +1,24 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
  # Python 抽象基类工具，用来实现策略模式顶层抽象
-from abc import ABC, abstractmethod     # ABC：所有抽象父类必须继承的基类；abstractmethod：标记抽象方法 
+from abc import ABC, abstractmethod     # ABC：所有抽象父类必须继承的基类；abstractmethod：标记抽象方法
 from collections import defaultdict     # 带默认值的字典
 
 from scapy.all import IP, TCP, UDP
 from scapy.contrib.automotive.someip import SOMEIP
 
 from common import ErrorDict, MessageDict, build_error_dict, build_message_dict, extract_someip_fields, validate_someip
+
+try:
+    from utils.logger import get_logger
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 # 策略模式（Strategy Pattern） 的抽象父类
 # 统一 UDP、TCP 两种传输层 SOME/IP 报文的解析接口，对外提供完全一致的调用规范
@@ -32,11 +43,14 @@ class UdpSomeIpStrategy(TransportParseStrategy):
     def extract_messages(self, frame_index: int, pkt) -> tuple[list[MessageDict], list[ErrorDict]]:
         payload_bytes = bytes(pkt[UDP].payload) # 提取 UDP 载荷二进制
         if len(payload_bytes) < 16:     # 小于16字节不合法
+            logger.debug("Frame %d | UDP payload too short (%d bytes), skipping",
+                        frame_index, len(payload_bytes))
             return [], []
 
         try:    # Scapy 协议层解码，捕获解析异常
             someip_packet = SOMEIP(payload_bytes)
         except Exception as exc:
+            logger.debug("Frame %d | UDP SOME/IP decode failed: %s", frame_index, exc)
             return [], [
                 build_error_dict(frame_index, self.transport_name, pkt, type(exc).__name__, str(exc), payload_bytes)
             ]
@@ -45,6 +59,8 @@ class UdpSomeIpStrategy(TransportParseStrategy):
         fields = extract_someip_fields(someip_packet)
         validation_errors = validate_someip(fields, len(payload_bytes))
         if validation_errors:
+            logger.debug("Frame %d | UDP SOME/IP validation failed: %s",
+                        frame_index, "; ".join(validation_errors))
             return [], [
                 build_error_dict(
                     frame_index,
@@ -56,6 +72,8 @@ class UdpSomeIpStrategy(TransportParseStrategy):
                 )
             ]
 
+        logger.debug("Frame %d | UDP SOME/IP OK | SvcID=0x%04X MethodID=0x%04X",
+                     frame_index, fields["srv_id"], fields["sub_id"])
         return [build_message_dict(0, frame_index, self.transport_name, pkt, fields, payload_bytes)], []
 
 # TCP 分片缓存工具
@@ -80,6 +98,8 @@ class TcpStreamReassembler:
 
         key = self.stream_key(pkt)
         self._streams[key].extend(payload)
+        logger.debug("TCP stream %s:%d→%s:%d | +%d bytes | buffer=%d bytes",
+                     key[0], key[1], key[2], key[3], len(payload), len(self._streams[key]))
         return self._streams[key]
 
 
@@ -106,6 +126,7 @@ class TcpSomeIpStrategy(TransportParseStrategy):
             try:
                 header_packet = SOMEIP(header_bytes)
             except Exception as exc:    # 头部二进制非法，整条流缓存清空，终止循环
+                logger.debug("Frame %d | TCP header parse failed: %s", frame_index, exc)
                 errors.append(
                     build_error_dict(frame_index, self.transport_name, pkt, type(exc).__name__, str(exc), header_bytes)
                 )
@@ -114,6 +135,7 @@ class TcpSomeIpStrategy(TransportParseStrategy):
 
             header_fields = extract_someip_fields(header_packet)
             if not isinstance(header_fields.get("len"), int):
+                logger.debug("Frame %d | TCP length field missing/invalid, clearing buffer", frame_index)
                 errors.append(      # length缺失/格式错误，清空缓存退出
                     build_error_dict(
                         frame_index,
@@ -126,10 +148,11 @@ class TcpSomeIpStrategy(TransportParseStrategy):
                 )
                 buffer.clear()
                 break
-            
+
             # 总长 = 头+len本身+len = 8 + len
             total_length = 8 + header_fields["len"]
             if total_length < 16:   # 不够长
+                logger.debug("Frame %d | TCP invalid total_length=%d", frame_index, total_length)
                 errors.append(
                     build_error_dict(
                         frame_index,
@@ -142,11 +165,13 @@ class TcpSomeIpStrategy(TransportParseStrategy):
                 )
                 buffer.clear()
                 break
-            
+
             # 当前缓存字节不够一条完整 SOME/IP 消息，退出循环，等待下一个 TCP 分片。
             if len(buffer) < total_length:
+                logger.debug("Frame %d | TCP waiting for more data: have %d, need %d",
+                            frame_index, len(buffer), total_length)
                 break
-            
+
             # 截取完整报文，并从缓存删除已消费字节
             message_bytes = bytes(buffer[:total_length])
             del buffer[:total_length]
@@ -155,6 +180,7 @@ class TcpSomeIpStrategy(TransportParseStrategy):
             try:
                 someip_packet = SOMEIP(message_bytes)
             except Exception as exc:
+                logger.debug("Frame %d | TCP message parse failed: %s", frame_index, exc)
                 errors.append(
                     build_error_dict(frame_index, self.transport_name, pkt, type(exc).__name__, str(exc), message_bytes)
                 )
@@ -163,6 +189,8 @@ class TcpSomeIpStrategy(TransportParseStrategy):
             fields = extract_someip_fields(someip_packet)
             validation_errors = validate_someip(fields, len(message_bytes))
             if validation_errors:
+                logger.debug("Frame %d | TCP validation failed: %s",
+                            frame_index, "; ".join(validation_errors))
                 errors.append(
                     build_error_dict(
                         frame_index,
@@ -174,8 +202,10 @@ class TcpSomeIpStrategy(TransportParseStrategy):
                     )
                 )
                 continue
-            
+
             # 合法报文存入结果列表
+            logger.debug("Frame %d | TCP SOME/IP OK | SvcID=0x%04X MethodID=0x%04X",
+                         frame_index, fields["srv_id"], fields["sub_id"])
             messages.append(build_message_dict(0, frame_index, self.transport_name, pkt, fields, message_bytes))
 
         return messages, errors

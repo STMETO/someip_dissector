@@ -1,6 +1,8 @@
 # 开启延迟类型注解，允许类型注解中使用尚未定义的类型，必须放在文件首行
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from typing import Any, Literal, TypedDict  # 静态类型注解基础工具
 # 兼容Python3.11前后TypedDict可选字段标记NotRequired
 try:
@@ -12,6 +14,14 @@ except ImportError:
 from scapy.all import IP, TCP, UDP
 # Scapy汽车领域扩展模块，解析车载SOME/IP协议报文
 from scapy.contrib.automotive.someip import SOMEIP
+
+try:
+    from utils.logger import get_logger
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 TransportName = Literal["UDP", "TCP"]
 
@@ -172,6 +182,9 @@ def validate_someip(fields: dict[str, Any], payload_len: int) -> list[str]:
     # 消息类型是否在合法集合
     if msg_type not in VALID_MESSAGE_TYPES:
         errors.append(f"message_type=0x{msg_type:02X} is not a known SOME/IP type")
+
+    if errors:
+        logger.debug("SOME/IP validation: %d issue(s) — %s", len(errors), "; ".join(errors))
 
     return errors
 

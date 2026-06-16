@@ -1,12 +1,21 @@
 from __future__ import annotations
 
-from pathlib import Path
 import json
+import sys
+from pathlib import Path
 
 from scapy.all import PcapReader, TCP, UDP
 
 from common import ParseResultDict
 from strategies import TcpSomeIpStrategy, TransportParseStrategy, UdpSomeIpStrategy
+
+try:
+    from utils.logger import get_logger
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class SomeIpPcapParser:
@@ -14,6 +23,7 @@ class SomeIpPcapParser:
         self.strategies = strategies
 
     def parse(self, pcap_path: Path, output_path: Path) -> ParseResultDict:
+        logger.info("Parsing pcap: %s", pcap_path)
         # 初始化全局结果容器
         result = {
             "source_pcap": str(pcap_path),
@@ -35,6 +45,7 @@ class SomeIpPcapParser:
 
         # 文件存在性校验
         if not pcap_path.exists():
+            logger.warning("Pcap file not found: %s", pcap_path)
             result["errors"].append({
                 "type": "FileNotFoundError",
                 "reason": f"pcap file not found: {pcap_path}",
@@ -68,11 +79,25 @@ class SomeIpPcapParser:
                             message_index += 1
                             result["messages"].append(message)  # 把这条合法报文存入全局总报文列表
                             result["summary"]["parsed_by_transport"][message["transport"]] += 1
+                            logger.debug("Frame %d | %s message | SvcID=%s MethodID=%s",
+                                         frame_index, message["transport"],
+                                         message["header"]["service_id"]["hex"],
+                                         message["header"]["method_id"]["hex"])
+
+                        for err in parsed_errors:
+                            logger.debug("Frame %d | %s error | %s: %s",
+                                         frame_index, err["transport"], err["type"], err["reason"])
 
                         result["errors"].extend(parsed_errors)
                         break
 
+                    # 每 1000 帧报告一次进度
+                    if frame_index % 1000 == 0:
+                        logger.debug("Frames processed: %d, messages found: %d",
+                                     frame_index, message_index - 1)
+
         except Exception as exc:
+            logger.error("Pcap read failed: %s", exc)
             result["errors"].append({
                 "type": type(exc).__name__,
                 "reason": str(exc),
@@ -80,6 +105,10 @@ class SomeIpPcapParser:
 
         result["summary"]["parsed_messages"] = len(result["messages"])
         result["summary"]["error_count"] = len(result["errors"])
+        logger.info("Parse done — frames: %d, messages: %d, errors: %d",
+                    result["summary"]["total_frames"],
+                    result["summary"]["parsed_messages"],
+                    result["summary"]["error_count"])
         return result
 
 
@@ -93,8 +122,10 @@ def parse_someip_pcap(pcap_path: Path, output_path: Path) -> ParseResultDict:
 
 # 将解析完成的结构化结果字典 ParseResultDict，持久化写入本地 JSON 文件
 def write_result_json(result: ParseResultDict, output_path: Path) -> None:
+    logger.info("Writing result to: %s", output_path)
     with output_path.open("w", encoding="utf-8") as file:
         json.dump(result, file, ensure_ascii=False, indent=2)
+    logger.info("JSON written OK, size: %d bytes", output_path.stat().st_size)
 
 
 def main() -> int:
@@ -105,12 +136,13 @@ def main() -> int:
     result = parse_someip_pcap(pcap_path, output_path)
     write_result_json(result, output_path)
 
-    print(f"Parsed messages: {result['summary']['parsed_messages']}")
-    print(f"UDP messages: {result['summary']['parsed_by_transport']['UDP']}")
-    print(f"TCP messages: {result['summary']['parsed_by_transport']['TCP']}")
-    print(f"Errors: {result['summary']['error_count']}")
-    print(f"JSON written to: {output_path}")
+    logger.info("Parsed messages: %d (UDP: %d, TCP: %d), Errors: %d",
+                result["summary"]["parsed_messages"],
+                result["summary"]["parsed_by_transport"]["UDP"],
+                result["summary"]["parsed_by_transport"]["TCP"],
+                result["summary"]["error_count"])
 
     if result["errors"] and not result["messages"]:
+        logger.warning("All frames failed — check pcap format or SOME/IP configuration")
         return 1
     return 0
