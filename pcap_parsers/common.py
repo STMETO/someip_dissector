@@ -97,6 +97,9 @@ class ParseResultDict(TypedDict):
     summary: SummaryDict
 
 # SOME/IP 协议规定合法的 message_type（消息类型）集合
+# SOME/IP-SD 固定 Service ID
+SOMEIP_SD_SERVICE_ID = 0xFFFF
+
 VALID_MESSAGE_TYPES = {
     0x00, 0x01, 0x02,   # 请求类消息
     0x20, 0x21, 0x22,   # 响应类消息
@@ -222,18 +225,27 @@ def build_message_dict(
     message_bytes: bytes,     # 完整SOME/IP报文二进制字节流（头部16字节 + payload）
 ) -> MessageDict:
     transport_layer = pkt[UDP] if transport == "UDP" else pkt[TCP]
-    return {
+    payload_bytes = message_bytes[16:]
+    msg: MessageDict = {
         # 1. 报文索引信息
         "index": index,
         "frame_index": frame_index,
         "transport": transport,
         # 2. 解包注入 源IP/目的IP/源端口/目的端口 键值对
-        **get_layer_endpoints(pkt, transport_layer),
+        **get_layer_endpoints(pkt, transport_layer),  # type: ignore[dict-item]
         "header": build_header_dict(fields),
-        "payload_hex": message_bytes[16:].hex(),       # 跳过前16字节标准头，载荷转十六进制字符串
-        "payload_length": len(message_bytes) - 16,     # 载荷字节长度 = 总长度 - 16字节头部
-        "raw_header_hex": message_bytes[:16].hex(),    # 前16字节标准SOME/IP头原始十六进制
+        "payload_hex": payload_bytes.hex(),
+        "payload_length": len(payload_bytes),
+        "raw_header_hex": message_bytes[:16].hex(),
     }
+
+    # ---- SOME/IP-SD 内联解析 ----
+    if fields.get("srv_id") == SOMEIP_SD_SERVICE_ID:
+        sd_data = parse_sd_payload(payload_bytes)
+        if sd_data is not None:
+            msg["sd"] = sd_data  # type: ignore[typeddict-unknown-key]
+
+    return msg
 
 # 生成异常报文的标准化错误结构体 ErrorDict
 def build_error_dict(
@@ -256,3 +268,118 @@ def build_error_dict(
         error["raw_header_hex"] = raw_bytes[:16].hex()
         error["transport_payload_length"] = len(raw_bytes)
     return error
+
+
+# ======================================================================
+# SOME/IP-SD（Service Discovery）解析
+# ======================================================================
+
+# 入口类型名称映射
+_SD_ENTRY_TYPE_NAMES = {
+    0x00: "FindService",
+    0x01: "OfferService",
+    0x06: "SubscribeEventGroup",
+    0x07: "SubscribeEventGroupAck",
+    0x10: "StopOfferService",
+    0x16: "SubscribeEventGroupNack",
+}
+
+# 选项类型名称映射
+_SD_OPTION_TYPE_NAMES = {
+    0x01: "Configuration",
+    0x02: "LoadBalance",
+    0x03: "IPv4Multicast",
+    0x04: "IPv4Endpoint",
+    0x05: "IPv6Multicast",
+    0x06: "IPv6Endpoint",
+    0x24: "IPv4SDEndpoint",
+    0x26: "IPv6SDEndpoint",
+}
+
+# L4 协议号映射
+_L4_PROTO_NAMES = {
+    6: "TCP",
+    17: "UDP",
+}
+
+
+def parse_sd_payload(payload_bytes: bytes) -> dict[str, Any] | None:
+    """解析 SOME/IP-SD 负载，失败返回 None。
+
+    仅在 Service ID == 0xFFFF 时调用。
+    """
+    try:
+        from scapy.contrib.automotive.someip import SD
+        sd = SD(payload_bytes)
+    except Exception:
+        logger.debug("SD parse failed: payload=%s", payload_bytes.hex())
+        return None
+
+    # ---- 标志位 ----
+    flags_raw = int(sd.flags)
+    flag_names = []
+    if flags_raw & 0x80:
+        flag_names.append("Reboot")
+    if flags_raw & 0x40:
+        flag_names.append("Unicast")
+    if flags_raw & 0x20:
+        flag_names.append("Multicast")
+    if not flag_names:
+        flag_names.append("None")
+
+    result: dict[str, Any] = {
+        "flags": {
+            "dec": flags_raw,
+            "hex": f"0x{flags_raw:02X}",
+            "names": flag_names,
+        },
+        "entries": [],
+        "options": [],
+    }
+
+    # ---- 解析 Entry ----
+    for entry in sd.entry_array:
+        entry_type = int(getattr(entry, "type", 0))
+        entry_dict: dict[str, Any] = {
+            "type": _SD_ENTRY_TYPE_NAMES.get(entry_type, f"Unknown(0x{entry_type:02X})"),
+        }
+
+        if hasattr(entry, "srv_id"):
+            entry_dict["service_id"] = format_int(int(entry.srv_id), 4)
+        if hasattr(entry, "inst_id"):
+            entry_dict["instance_id"] = format_int(int(entry.inst_id), 4)
+        if hasattr(entry, "major_ver"):
+            entry_dict["major_version"] = format_int(int(entry.major_ver), 2)
+        if hasattr(entry, "ttl"):
+            entry_dict["ttl"] = format_int(int(entry.ttl), 6)
+        if hasattr(entry, "minor_ver"):
+            entry_dict["minor_version"] = format_int(int(entry.minor_ver), 8)
+        if hasattr(entry, "eventgroup_id"):
+            entry_dict["eventgroup_id"] = format_int(int(entry.eventgroup_id), 4)
+
+        result["entries"].append(entry_dict)
+
+    # ---- 解析 Option ----
+    for opt in sd.option_array:
+        opt_type = int(getattr(opt, "type", 0))
+        opt_dict: dict[str, Any] = {
+            "type": _SD_OPTION_TYPE_NAMES.get(opt_type, f"Unknown(0x{opt_type:02X})"),
+        }
+
+        if hasattr(opt, "addr"):
+            opt_dict["address"] = str(opt.addr)
+        if hasattr(opt, "port"):
+            opt_dict["port"] = int(opt.port)
+        if hasattr(opt, "l4_proto"):
+            proto_val = int(opt.l4_proto)
+            opt_dict["l4_proto"] = _L4_PROTO_NAMES.get(proto_val, str(proto_val))
+        if hasattr(opt, "priority"):
+            opt_dict["priority"] = format_int(int(opt.priority), 2)
+        if hasattr(opt, "weight"):
+            opt_dict["weight"] = format_int(int(opt.weight), 2)
+
+        result["options"].append(opt_dict)
+
+    logger.debug("SD parsed: %d entries, %d options",
+                 len(result["entries"]), len(result["options"]))
+    return result
