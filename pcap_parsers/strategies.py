@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
  # Python 抽象基类工具，用来实现策略模式顶层抽象
 from abc import ABC, abstractmethod     # ABC：所有抽象父类必须继承的基类；abstractmethod：标记抽象方法
 from collections import defaultdict     # 带默认值的字典
@@ -10,13 +7,8 @@ from collections import defaultdict     # 带默认值的字典
 from scapy.all import IP, TCP, UDP
 from scapy.contrib.automotive.someip import SOMEIP
 
-from common import ErrorDict, MessageDict, build_error_dict, build_message_dict, extract_someip_fields, validate_someip
-
-try:
-    from utils.logger import get_logger
-except ImportError:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from utils.logger import get_logger
+from .common import ErrorDict, MessageDict, build_error_dict, build_message_dict, extract_someip_fields, validate_someip
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 

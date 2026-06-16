@@ -1,19 +1,13 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 from scapy.all import PcapReader, TCP, UDP
 
-from common import ParseResultDict
-from strategies import TcpSomeIpStrategy, TransportParseStrategy, UdpSomeIpStrategy
-
-try:
-    from utils.logger import get_logger
-except ImportError:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from utils.logger import get_logger
+from .common import ParseResultDict
+from .strategies import TcpSomeIpStrategy, TransportParseStrategy, UdpSomeIpStrategy
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -128,21 +122,3 @@ def write_result_json(result: ParseResultDict, output_path: Path) -> None:
     logger.info("JSON written OK, size: %d bytes", output_path.stat().st_size)
 
 
-def main() -> int:
-    base_dir = Path(__file__).resolve().parent
-    pcap_path = base_dir / "sample.pcap"
-    output_path = base_dir / "sample.json"
-
-    result = parse_someip_pcap(pcap_path, output_path)
-    write_result_json(result, output_path)
-
-    logger.info("Parsed messages: %d (UDP: %d, TCP: %d), Errors: %d",
-                result["summary"]["parsed_messages"],
-                result["summary"]["parsed_by_transport"]["UDP"],
-                result["summary"]["parsed_by_transport"]["TCP"],
-                result["summary"]["error_count"])
-
-    if result["errors"] and not result["messages"]:
-        logger.warning("All frames failed — check pcap format or SOME/IP configuration")
-        return 1
-    return 0

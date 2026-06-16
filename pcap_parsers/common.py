@@ -1,8 +1,6 @@
 # 开启延迟类型注解，允许类型注解中使用尚未定义的类型，必须放在文件首行
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from typing import Any, Literal, TypedDict  # 静态类型注解基础工具
 # 兼容Python3.11前后TypedDict可选字段标记NotRequired
 try:
@@ -15,11 +13,7 @@ from scapy.all import IP, TCP, UDP
 # Scapy汽车领域扩展模块，解析车载SOME/IP协议报文
 from scapy.contrib.automotive.someip import SOMEIP
 
-try:
-    from utils.logger import get_logger
-except ImportError:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from utils.logger import get_logger
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
