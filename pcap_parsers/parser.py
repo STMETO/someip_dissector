@@ -2,10 +2,18 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from scapy.all import PcapReader, TCP, UDP
 
-from .common import ParseResultDict
+from .common import (
+    ParseResultDict,
+    SD_ENTRY_TYPE_NAMES,
+    SD_L4_PROTO_NAMES,
+    SD_OPTION_TYPE_NAMES,
+    SOMEIP_SD_SERVICE_ID,
+    format_int,
+)
 from .strategies import TcpSomeIpStrategy, TransportParseStrategy, UdpSomeIpStrategy
 from utils.logger import get_logger
 
@@ -73,6 +81,13 @@ class SomeIpPcapParser:
                             message_index += 1
                             result["messages"].append(message)  # 把这条合法报文存入全局总报文列表
                             result["summary"]["parsed_by_transport"][message["transport"]] += 1
+
+                            # ---- SOME/IP-SD 后处理 ----
+                            if message["header"]["service_id"]["dec"] == SOMEIP_SD_SERVICE_ID:
+                                sd_data = _parse_sd_payload(bytes.fromhex(message["payload_hex"]))
+                                if sd_data is not None:
+                                    message["sd"] = sd_data
+
                             logger.debug("Frame %d | %s message | SvcID=%s MethodID=%s",
                                          frame_index, message["transport"],
                                          message["header"]["service_id"]["hex"],
@@ -104,6 +119,89 @@ class SomeIpPcapParser:
                     result["summary"]["parsed_messages"],
                     result["summary"]["error_count"])
         return result
+
+
+# ---------------------------------------------------------------------------
+# SOME/IP-SD 负载解析
+# ---------------------------------------------------------------------------
+
+def _parse_sd_payload(payload_bytes: bytes) -> dict[str, Any] | None:
+    """解析 SOME/IP-SD 负载，失败返回 None。
+
+    仅在 Service ID == 0xFFFF 时由 _do_sd_postprocess 调用。
+    依赖 .common 中的 SD_* 映射表。
+    """
+    try:
+        from scapy.contrib.automotive.someip import SD  # noqa: PLC0415
+        sd = SD(payload_bytes)
+    except Exception:
+        logger.debug("SD parse failed: payload=%s", payload_bytes.hex())
+        return None
+
+    # ---- 标志位 ----
+    flags_raw = int(sd.flags)
+    flag_names = []
+    if flags_raw & 0x80:
+        flag_names.append("Reboot")
+    if flags_raw & 0x40:
+        flag_names.append("Unicast")
+    if flags_raw & 0x20:
+        flag_names.append("Multicast")
+    if not flag_names:
+        flag_names.append("None")
+
+    result: dict[str, Any] = {
+        "flags": {
+            "dec": flags_raw,
+            "hex": f"0x{flags_raw:02X}",
+            "names": flag_names,
+        },
+        "entries": [],
+        "options": [],
+    }
+
+    # ---- Entry ----
+    for entry in sd.entry_array:
+        etype = int(getattr(entry, "type", 0))
+        ed: dict[str, Any] = {
+            "type": SD_ENTRY_TYPE_NAMES.get(etype, f"Unknown(0x{etype:02X})"),
+        }
+        if hasattr(entry, "srv_id"):
+            ed["service_id"] = format_int(int(entry.srv_id), 4)
+        if hasattr(entry, "inst_id"):
+            ed["instance_id"] = format_int(int(entry.inst_id), 4)
+        if hasattr(entry, "major_ver"):
+            ed["major_version"] = format_int(int(entry.major_ver), 2)
+        if hasattr(entry, "ttl"):
+            ed["ttl"] = format_int(int(entry.ttl), 6)
+        if hasattr(entry, "minor_ver"):
+            ed["minor_version"] = format_int(int(entry.minor_ver), 8)
+        if hasattr(entry, "eventgroup_id"):
+            ed["eventgroup_id"] = format_int(int(entry.eventgroup_id), 4)
+        result["entries"].append(ed)
+
+    # ---- Option ----
+    for opt in sd.option_array:
+        otype = int(getattr(opt, "type", 0))
+        od: dict[str, Any] = {
+            "type": SD_OPTION_TYPE_NAMES.get(otype, f"Unknown(0x{otype:02X})"),
+        }
+        if hasattr(opt, "addr"):
+            od["address"] = str(opt.addr)
+        if hasattr(opt, "port"):
+            od["port"] = int(opt.port)
+        if hasattr(opt, "l4_proto"):
+            proto_val = int(opt.l4_proto)
+            od["l4_proto"] = SD_L4_PROTO_NAMES.get(proto_val, str(proto_val))
+        if hasattr(opt, "priority"):
+            od["priority"] = format_int(int(opt.priority), 2)
+        if hasattr(opt, "weight"):
+            od["weight"] = format_int(int(opt.weight), 2)
+        result["options"].append(od)
+
+    logger.debug("SD: %d entries, %d options",
+                 len(result["entries"]), len(result["options"]))
+    return result
 
 
 def parse_someip_pcap(pcap_path: Path, output_path: Path) -> ParseResultDict:
