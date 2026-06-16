@@ -9,6 +9,10 @@ Usage:
     python generate_sample_pcap.py --output path/to/sample.pcap
 """
 
+"""
+    自动生成pcap包,用于pcap_parsers验证
+"""
+
 from __future__ import annotations
 
 import argparse
