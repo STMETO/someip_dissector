@@ -1,5 +1,13 @@
+# 抓包文件
 *.pcap
+
+# 日志文件
 *.log
+/logs/
+
+# Python 编译缓存
 __pycache__/
 *.pyc
+
+# json文件
 *.json

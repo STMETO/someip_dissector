@@ -13,6 +13,10 @@ from scapy.all import IP, TCP, UDP
 # Scapy汽车领域扩展模块，解析车载SOME/IP协议报文
 from scapy.contrib.automotive.someip import SOMEIP
 
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 TransportName = Literal["UDP", "TCP"]
 
 class HexIntDict(TypedDict):
@@ -172,6 +176,9 @@ def validate_someip(fields: dict[str, Any], payload_len: int) -> list[str]:
     # 消息类型是否在合法集合
     if msg_type not in VALID_MESSAGE_TYPES:
         errors.append(f"message_type=0x{msg_type:02X} is not a known SOME/IP type")
+
+    if errors:
+        logger.debug("SOME/IP validation: %d issue(s) — %s", len(errors), "; ".join(errors))
 
     return errors
 
