@@ -1,0 +1,1 @@
+docker exec -it someip_dissector /bin/bash
