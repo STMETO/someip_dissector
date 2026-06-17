@@ -15,7 +15,10 @@ from pathlib import Path
 
 from lxml import etree
 
+# AUTOSAR R4.0 标准 XML 命名空间 URI（ARXML 文件根节点固定声明）
 _AR_NS = "http://autosar.org/schema/r4.0"
+
+# 命名空间映射字典，给 XPath 查询起别名：key ns：自定义命名空间前缀；
 _NSMAP = {"ns": _AR_NS}
 
 
@@ -23,91 +26,103 @@ _NSMAP = {"ns": _AR_NS}
 # 数据类
 # ======================================================================
 
-
+# 基础类型相关（AUTOSAR 数据类型体系）
+# @dataclass：装饰器，自动生成构造函数、__repr__、__eq__，不用手写初始化
 @dataclass
 class RawBaseType:
     """SW-BASE-TYPE 原始信息。"""
+    # 对应 ARXML 节点：<SW-BASE-TYPE>
 
-    name: str
-    path: str = ""
-    bit_size: int = 0
-    encoding: str = ""
-    byte_order: str = ""   # OPAQUE | BIG-ENDIAN | LITTLE-ENDIAN
+    name: str               # 类型短名，如 uint32
+    path: str = ""          # ARXML 完整对象路径，如 /DataTypes/SwBaseTypes/uint32，用于全局索引查找
+    bit_size: int = 0       # 占用比特数，uint32 就是 32
+    encoding: str = ""      # 编码方式，如 TWOS_COMPLEMENT（补码）、IEEE754 浮点
+    byte_order: str = ""    # OPAQUE(二进制不透传) | BIG-ENDIAN | LITTLE-ENDIAN
 
+@dataclass
+class RawSubElement:
+    """STRUCTURE / CPP-IMPLEMENTATION-DATA-TYPE-ELEMENT 中的一个字段。"""
+    # 对应节点：<CPP-IMPLEMENTATION-DATA-TYPE-ELEMENT>
+    # 结构体里面的单个字段，仅用于 RawDataType 结构体分类下的子项。
+
+    name: str           # 结构体字段名
+    type_ref: str       # 字符串路径，指向该字段引用的数据类型
 
 @dataclass
 class RawDataType:
     """一个 STD-CPP-IMPLEMENTATION-DATA-TYPE 的原始信息。"""
+    # 对应节点：<STD-CPP-IMPLEMENTATION-DATA-TYPE>
+    # AUTOSAR Adaptive 上层复合数据类型，分 5 种类别由 category 区分
 
     name: str
     path: str = ""
     category: str = ""          # TYPE_REFERENCE | VALUE | STRUCTURE | VECTOR | ARRAY
     type_ref: str = ""           # TYPE-REFERENCE-REF 或 TEMPLATE-TYPE-REF
     array_size: int = 0          # VECTOR / ARRAY
-    sub_elements: list[RawSubElement] = field(default_factory=list)
+    sub_elements: list[RawSubElement] = field(default_factory=list) # 结构体成员列表
 
 
-@dataclass
-class RawSubElement:
-    """STRUCTURE / CPP-IMPLEMENTATION-DATA-TYPE-ELEMENT 中的一个字段。"""
-
-    name: str
-    type_ref: str
-
-
+# 服务接口层（SERVICE-INTERFACE，业务 API 定义）
 @dataclass
 class RawMethodArg:
     """ARGUMENT-DATA-PROTOTYPE 的原始信息。"""
-
-    name: str
-    type_ref: str
+    # 对应节点：<ARGUMENT-DATA-PROTOTYPE>，接口方法的单个入参 / 出参
+    name: str            # 参数名
+    type_ref: str        # 参数绑定的数据类型路径
     direction: str = ""  # IN | OUT | INOUT
 
 
 @dataclass
 class RawServiceMethod:
     """一个 CLIENT-SERVER-OPERATION 的参数信息。"""
+    # 对应节点：<CLIENT-SERVER-OPERATION>，服务里的一个 RPC 方法（客户端调用、服务端响应）
 
-    name: str
-    arguments: list[RawMethodArg] = field(default_factory=list)
+    name: str       # 方法名
+    arguments: list[RawMethodArg] = field(default_factory=list) # 该方法所有参数列表
 
 
 @dataclass
 class RawServiceEvent:
     """一个 VARIABLE-DATA-PROTOTYPE 的原始信息。"""
+    # 对应节点：<VARIABLE-DATA-PROTOTYPE>  服务广播事件（服务端主动推送，客户端订阅）
 
-    name: str
-    type_ref: str
+    name: str           # 事件名称
+    type_ref: str       # 事件携带的数据类型
 
 
 @dataclass
 class RawServiceInterface:
     """一个 SERVICE-INTERFACE 的完整信息。"""
+    # 对应节点：<SERVICE-INTERFACE>，完整服务接口，一组 RPC 方法 + 广播事件的集合
 
-    name: str
-    path: str
-    methods: dict[str, RawServiceMethod] = field(default_factory=dict)
-    events: dict[str, RawServiceEvent] = field(default_factory=dict)
+    name: str           # 接口名称
+    path: str           # 全局路径
+    methods: dict[str, RawServiceMethod] = field(default_factory=dict)  # 字典 key = 方法名，快速按名称查找方法
+    events: dict[str, RawServiceEvent] = field(default_factory=dict)    # 字典 key = 事件名，快速按名称查找事件
 
 
+# SOME/IP 部署 ID 映射层（网络传输层配置）
 @dataclass
 class RawMethodDeployment:
-    method_id: int
-    method_ref: str
+    # 单个方法的 SOME/IP ID 绑定
+    method_id: int      # method_id：SOME/IP MethodID（数字）
+    method_ref: str     # 字符串路径，关联前面定义的 RawServiceMethod
 
 
 @dataclass
 class RawEventDeployment:
-    event_id: int
-    event_ref: str
+    # 单个事件的 SOME/IP ID 绑定
+    event_id: int   # SOME/IP EventID（数字）
+    event_ref: str  # 关联事件对象路径
 
 
 @dataclass
 class RawServiceDeployment:
-    service_id: int
-    interface_ref: str
-    methods: list[RawMethodDeployment] = field(default_factory=list)
-    events: list[RawEventDeployment] = field(default_factory=list)
+    # 对应节点：<SOMEIP-SERVICE-INTERFACE-DEPLOYMENT> 整个服务接口的完整 SOME/IP 部署配置：
+    service_id: int         # SOME/IP ServiceID（服务总 ID）
+    interface_ref: str      # 关联对应的 SERVICE-INTERFACE 路径
+    methods: list[RawMethodDeployment] = field(default_factory=list)    # 该服务下所有方法 ID 映射列表
+    events: list[RawEventDeployment] = field(default_factory=list)      # 该服务下所有事件 ID 映射列表
 
 
 # ======================================================================
@@ -122,22 +137,24 @@ class ArxmlParser:
         self.filepath = Path(filepath)
         self._root: etree._Element | None = None
 
-        self.raw_base_types: list[RawBaseType] = []
-        self.raw_types: list[RawDataType] = []
-        self.raw_interfaces: list[RawServiceInterface] = []
-        self.raw_deployments: list[RawServiceDeployment] = []
+        self.raw_base_types: list[RawBaseType] = []             # 全部底层基础类型 uint8/int32...
+        self.raw_types: list[RawDataType] = []                  # 全部结构体、数组、vector 自定义类型
+        self.raw_interfaces: list[RawServiceInterface] = []     # 全部服务接口（方法 + 事件）
+        self.raw_deployments: list[RawServiceDeployment] = []   # 全部 SOME/IP ID 部署映射
 
     # ---- 公开接口 ----
 
+    # 唯一给外部调用的方法，固定线性解析流程
     def parse(self) -> None:
-        self._load_xml()
-        self.raw_base_types = self._extract_base_types()
-        self.raw_types = self._extract_impl_types()
-        self.raw_interfaces = self._extract_service_interfaces()
-        self.raw_deployments = self._extract_deployments()
+        self._load_xml()                                         # 先加载 XML 生成 DOM 树根#
+        self.raw_base_types = self._extract_base_types()         # 提取基础类型（底层最小数据单元）
+        self.raw_types = self._extract_impl_types()              # 提取复合自定义类型（结构体 / 数组依赖基础类型）
+        self.raw_interfaces = self._extract_service_interfaces() # 提取服务接口（接口参数依赖上面定义的所有类型）
+        self.raw_deployments = self._extract_deployments()       # 提取 SOME/IP 部署（部署绑定接口、方法、事件）
 
+    # _load_xml () 加载 XML 文件
     def _load_xml(self) -> None:
-        self._root = etree.parse(
+        self._root = etree.parse(   # lxml 加载文件，生成 DOM 树
             str(self.filepath), etree.XMLParser(remove_blank_text=True)
         ).getroot()
 
@@ -146,8 +163,11 @@ class ArxmlParser:
     # ==================================================================
 
     def _extract_base_types(self) -> list[RawBaseType]:
+        # XPath 全局查找所有 <SW-BASE-TYPE> 节点：.//ns:SW-BASE-TYPE
+        # .// 代表递归查找整个文档所有层级，不用关心节点在 XML 哪个位置
         elements = self._root.findall(".//ns:SW-BASE-TYPE", _NSMAP)
         result = []
+        # 遍历每个节点，依次提取：SHORT-NAME、完整路径、位宽、编码、字节序
         for elem in elements:
             name = self._child_text(elem, "SHORT-NAME") or ""
             path = self._resolve_ref_path(elem)
@@ -164,7 +184,7 @@ class ArxmlParser:
     # ==================================================================
     # IMPLEMENTATION TYPE（STD-CPP-IMPLEMENTATION-DATA-TYPE）
     # ==================================================================
-
+    # AUTOSAR 复合类型，根据 CATEGORY 分支处理不同结构
     def _extract_impl_types(self) -> list[RawDataType]:
         elements = self._root.findall(
             ".//ns:STD-CPP-IMPLEMENTATION-DATA-TYPE", _NSMAP
@@ -176,11 +196,11 @@ class ArxmlParser:
             path = self._resolve_ref_path(elem)
             rd = RawDataType(name=name, path=path, category=category)
 
-            if category == "TYPE_REFERENCE":
+            if category == "TYPE_REFERENCE":    # 简单引用其他类型，只存 type_ref
                 rd.type_ref = self._child_text(elem, "TYPE-REFERENCE-REF") or ""
-            elif category == "STRUCTURE":
+            elif category == "STRUCTURE":       # 调用子函数 _extract_struct_elements 提取结构体所有字段，生成 RawSubElement 列表
                 rd.sub_elements = self._extract_struct_elements(elem)
-            elif category in ("VECTOR", "ARRAY"):
+            elif category in ("VECTOR", "ARRAY"):   # 读取数组长度，调用 _child_text_deep 多层嵌套读取模板内部类型引用
                 rd.array_size = int(self._child_text(elem, "ARRAY-SIZE") or "0")
                 rd.type_ref = self._extract_template_type_ref(elem)
 
@@ -212,7 +232,7 @@ class ArxmlParser:
     # ==================================================================
     # SERVICE INTERFACE
     # ==================================================================
-
+    # 解析业务服务接口，分两部分：方法 + 事件
     def _extract_service_interfaces(self) -> list[RawServiceInterface]:
         elements = self._root.findall(".//ns:SERVICE-INTERFACE", _NSMAP)
         result = []
@@ -265,7 +285,7 @@ class ArxmlParser:
     # ==================================================================
     # DEPLOYMENT
     # ==================================================================
-
+    # 网络通信 ID 配置，和上层接口解耦：
     def _extract_deployments(self) -> list[RawServiceDeployment]:
         elements = self._root.findall(
             ".//ns:SOMEIP-SERVICE-INTERFACE-DEPLOYMENT", _NSMAP
@@ -313,11 +333,13 @@ class ArxmlParser:
     # ==================================================================
 
     @staticmethod
+    # 获取当前节点下直接子标签的文本，自动处理空值、去除首尾空格
     def _child_text(elem: etree._Element, tag: str) -> str | None:
         child = elem.find(f"ns:{tag}", _NSMAP)
         return child.text.strip() if child is not None and child.text else None
 
     @staticmethod
+    # 多层嵌套标签穿透读取，例如 ["A","B","C"]，逐层向下查找子节点，中间任意一层不存在直接返回空字符串。
     def _child_text_deep(
         elem: etree._Element, path: list[str]
     ) -> str:
@@ -331,6 +353,7 @@ class ArxmlParser:
         return cur.text.strip() if cur.text else ""
 
     @staticmethod
+    # 递归向上遍历父节点，收集每一层的 SHORT-NAME，拼接成 AUTOSAR 标准全局对象路径
     def _resolve_ref_path(elem: etree._Element) -> str:
         parts = []
         cur = elem
