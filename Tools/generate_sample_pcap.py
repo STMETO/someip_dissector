@@ -1,16 +1,11 @@
 """
 Generate a sample.pcap file containing valid SOME/IP packets over UDP and TCP.
 
-Pure Python — no third-party dependencies.  Produces a PCAP file that is also
-readable by the project's scapy-based parser.
+自动生成 pcap 包，用于 pcap_parsers 验证。
 
 Usage:
-    python generate_sample_pcap.py              # writes sample.pcap to the script's directory
+    python generate_sample_pcap.py              # writes sample.pcap to OUTPUT_PATH
     python generate_sample_pcap.py --output path/to/sample.pcap
-"""
-
-"""
-    自动生成pcap包,用于pcap_parsers验证
 """
 
 from __future__ import annotations
@@ -18,6 +13,11 @@ from __future__ import annotations
 import argparse
 import struct
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# 输出路径（修改此处即可）
+# ---------------------------------------------------------------------------
+OUTPUT_PATH: Path = Path(__file__).resolve().parent.parent / "test" / "test_pcap_parsers" / "test.pcap"
 
 # ---------------------------------------------------------------------------
 # PCAP file format helpers
@@ -551,7 +551,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    output_path = args.output or (Path(__file__).resolve().parent / "sample.pcap")
+    output_path = args.output or OUTPUT_PATH
 
     all_packets = generate_udp_packets() + generate_tcp_packets()
 

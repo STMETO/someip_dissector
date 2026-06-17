@@ -11,3 +11,6 @@ __pycache__/
 
 # json文件
 *.json
+
+# arxml文件
+*.arxml
