@@ -7,136 +7,17 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from typing import ClassVar
 
-from .arxml_parser import RawBaseType, RawDataType, RawSubElement
-
-
-# ======================================================================
-# DataType 体系
-# ======================================================================
-
-
-class DataType(ABC):
-    """反序列化数据类型的抽象基类。"""
-    # 抽象父类，统一所有数据类型的标准接口（强制必须提供 byte_size 字节长度）
-
-    def __init__(self, name: str, path: str = "") -> None:
-        self.name = name
-        self.path = path    # ARXML 全局唯一路径，用来匹配引用
-
-    @property
-    @abstractmethod
-    def byte_size(self) -> int: ...
-
-    def __repr__(self) -> str:
-        return f"<{type(self).__name__} name={self.name!r} size={self.byte_size}>"
-
-
-class BaseType(DataType):
-    """基础类型（uint8, int32, boolean...）。"""
-
-    def __init__(
-        self,
-        name: str,
-        path: str = "",
-        *,
-        bit_length: int = 8,            # 占用比特位数（uint32 = 32bit）
-        byte_order: str = "big",        # 大小端
-        is_signed: bool = False,        # 是否有符号（区分 int /uint）
-    ) -> None:
-        super().__init__(name, path)
-        self.bit_length = bit_length
-        self.byte_order = byte_order
-        self.is_signed = is_signed
-
-    @property
-    def byte_size(self) -> int:         # 计算字节大小
-        return self.bit_length // 8
-
-    def __repr__(self) -> str:
-        sign = "i" if self.is_signed else "u"
-        order = "le" if self.byte_order == "little" else ""
-        return f"<{type(self).__name__} {sign}{self.bit_length}{order} {self.name!r}>"
-
-
-class StringType(DataType):
-    """变长字符串 — 字节数由运行时数据决定。"""
-
-    def __init__(self, name: str, path: str = "") -> None:
-        super().__init__(name, path)
-
-    @property
-    def byte_size(self) -> int:
-        return 0  # 变长，编译时不可知，静态尺寸标记为 0，代码里看到 byte_size=0 就特殊处理变长逻辑
-
-
-@dataclass
-class StructField:
-    """结构体中的一个字段。"""
-
-    name: str                               # 字段名
-    type_ref: str                           # ARXML路径字符串（原始引用
-    resolved_type: DataType | None = None   # 解析完成后的真实类型对象
-    offset: int = 0                         # 该字段在结构体中的字节偏移量
-
-    @property
-    def byte_size(self) -> int:
-        if self.resolved_type is not None:
-            return self.resolved_type.byte_size
-        return 0
-
-
-class StructureType(DataType):
-    """结构体：包含有序字段。"""
-    # 由多个 StructField 有序组成
-
-    def __init__(self, name: str, path: str = "") -> None:
-        super().__init__(name, path)
-        self.fields: list[StructField] = []
-
-    def add_field(self, field: StructField) -> None:
-        self.fields.append(field)
-
-    # 自动遍历所有字段，累加字节长度，给每个字段分配 offset：
-    def resolve_offsets(self) -> None:
-        offset = 0
-        for f in self.fields:
-            f.offset = offset
-            offset += f.byte_size
-
-    @property
-    def byte_size(self) -> int:
-        if not self.fields:
-            return 0
-        self.resolve_offsets()
-        last = self.fields[-1]
-        return last.offset + last.byte_size
-
-
-class ArrayType(DataType):
-    """数组/向量类型。"""
-
-    def __init__(
-        self,
-        name: str,
-        path: str = "",
-        *,
-        element_type_ref: str = "",
-        element_type: DataType | None = None,
-        length: int = 0,
-    ) -> None:
-        super().__init__(name, path)
-        self.element_type_ref = element_type_ref
-        self.element_type = element_type
-        self.length = length
-
-    @property
-    def byte_size(self) -> int:
-        if self.element_type is not None:
-            return self.element_type.byte_size * self.length
-        return 0
+from .arxml_parser import RawBaseType, RawDataType
+from .data_types import (
+    ArrayType,
+    BaseType,
+    DataType,
+    StringType,
+    StructField,
+    StructureType,
+)
 
 
 # ======================================================================

@@ -1,13 +1,13 @@
 from .arxml_parser import ArxmlParser, RawBaseType, RawDataType
-from .type_factory import (
+from .data_types import (
     ArrayType,
     BaseType,
     DataType,
     StringType,
     StructField,
     StructureType,
-    TypeFactory,
 )
+from .type_factory import TypeFactory
 from .service_registry import ServiceRegistry
 
 __all__ = [
