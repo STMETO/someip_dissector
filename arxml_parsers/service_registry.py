@@ -6,7 +6,7 @@ SOME/IP 服务注册表。
 from __future__ import annotations
 from dataclasses import dataclass, field
 # 导入Parser产出的原始接口、部署、方法、事件数据类
-from arxml_parser import (
+from .arxml_parser import (
     RawServiceDeployment,
     RawServiceEvent,
     RawServiceInterface,
