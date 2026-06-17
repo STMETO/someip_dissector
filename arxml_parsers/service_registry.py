@@ -12,6 +12,9 @@ from .arxml_parser import (
     RawServiceInterface,
     RawServiceMethod,
 )
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -39,23 +42,28 @@ class ServiceRegistry:
         :param deployments: Parser输出的所有SOME/IP部署ID配置
         :param interfaces: Parser输出的所有服务接口逻辑定义
         """
+        logger.info("Building registry: %d deployments, %d interfaces",
+                    len(deployments), len(interfaces))
+
         # 第一步：缓存所有服务接口，兼容两种路径格式（原生路径 / 带/Package前缀路径）
         self._interface_index = {}
         for iface in interfaces:
-            # 存入标准完整路径
             self._interface_index[iface.path] = iface
-            # 兼容部分厂商ARXML引用时自动拼接 /Package 前缀的场景
             self._interface_index[f"/Package{iface.path}"] = iface
+
+        skipped_zero = 0
+        skipped_no_iface = 0
 
         # 第二步：遍历每一个服务的SOME/IP部署配置
         for dep in deployments:
-            # 过滤无效服务ID（ID=0代表未分配网络ID，跳过）
             if not dep.service_id:
+                skipped_zero += 1
                 continue
-            # 根据部署里的接口引用路径，找到对应的逻辑服务接口定义
             iface = self._find_interface(dep.interface_ref)
-            # 找不到对应接口，跳过本条部署
             if iface is None:
+                skipped_no_iface += 1
+                logger.debug("Deployment interface not found: %s", dep.interface_ref)
+                continue
                 continue
 
             # ========== 处理RPC方法，填充_method_map ==========
@@ -84,6 +92,13 @@ class ServiceRegistry:
                 if evt is not None and evt.type_ref:
                     event_key = (dep.service_id, ed.event_id)
                     self._event_map[event_key] = evt.type_ref
+
+        if skipped_zero:
+            logger.debug("Skipped %d deployments with service_id=0", skipped_zero)
+        if skipped_no_iface:
+            logger.debug("Skipped %d deployments with missing interface", skipped_no_iface)
+        logger.info("Registry built: %d methods, %d events",
+                    len(self._method_map), len(self._event_map))
 
     # ==================== 对外查询API ====================
     def lookup_method(self, service_id: int, method_id: int, msg_type: str) -> str | None:

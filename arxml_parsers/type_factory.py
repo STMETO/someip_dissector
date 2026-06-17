@@ -18,6 +18,9 @@ from .data_types import (
     StructField,
     StructureType,
 )
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 # ======================================================================
@@ -139,6 +142,8 @@ class TypeFactory:
         base_types: list[RawBaseType],
         impl_types: list[RawDataType],
     ) -> dict[str, DataType]:
+        logger.info("Building types: %d base, %d impl", len(base_types), len(impl_types))
+
         # 清空上次缓存，支持重复调用构建
         self._types.clear()
         # 将基础类型列表转为字典，方便按名称快速查询
@@ -156,6 +161,8 @@ class TypeFactory:
             builder = self._BUILDERS.get(raw.category)
             if builder is not None:
                 self._types[path] = builder.build(raw, self)
+
+        logger.debug("Pass 1: %d skeletons, %d aliases", len(self._types), len(self._alias))
 
         # ========== 第二遍：填充结构体/数组内部字段的真实类型引用 ==========
         for dt in self._types.values():
@@ -180,6 +187,13 @@ class TypeFactory:
                 # 找到有效非占位类型，替换掉字典里的占位对象
                 if resolved is not None and not _is_placeholder(resolved):
                     self._types[path] = resolved
+                    logger.debug("Resolved alias: %s → %s", _last_segment(path),
+                                type(resolved).__name__)
+
+        unresolved = sum(1 for dt in self._types.values() if _is_placeholder(dt))
+        if unresolved:
+            logger.debug("Unresolved placeholders: %d", unresolved)
+        logger.info("Build complete: %d types", len(self._types))
 
         # 返回全局完整类型池
         return self._types

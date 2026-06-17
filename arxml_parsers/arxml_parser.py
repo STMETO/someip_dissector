@@ -14,6 +14,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from lxml import etree
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 # AUTOSAR R4.0 标准 XML 命名空间 URI（ARXML 文件根节点固定声明）
 _AR_NS = "http://autosar.org/schema/r4.0"
@@ -146,11 +149,20 @@ class ArxmlParser:
 
     # 唯一给外部调用的方法，固定线性解析流程
     def parse(self) -> None:
-        self._load_xml()                                         # 先加载 XML 生成 DOM 树根#
-        self.raw_base_types = self._extract_base_types()         # 提取基础类型（底层最小数据单元）
-        self.raw_types = self._extract_impl_types()              # 提取复合自定义类型（结构体 / 数组依赖基础类型）
-        self.raw_interfaces = self._extract_service_interfaces() # 提取服务接口（接口参数依赖上面定义的所有类型）
-        self.raw_deployments = self._extract_deployments()       # 提取 SOME/IP 部署（部署绑定接口、方法、事件）
+        logger.info("Loading ARXML: %s", self.filepath)
+        self._load_xml()
+
+        self.raw_base_types = self._extract_base_types()
+        logger.info("Extracted %d SW-BASE-TYPEs", len(self.raw_base_types))
+
+        self.raw_types = self._extract_impl_types()
+        logger.info("Extracted %d implementation types", len(self.raw_types))
+
+        self.raw_interfaces = self._extract_service_interfaces()
+        logger.info("Extracted %d service interfaces", len(self.raw_interfaces))
+
+        self.raw_deployments = self._extract_deployments()
+        logger.info("Extracted %d SOME/IP deployments", len(self.raw_deployments))
 
     # _load_xml () 加载 XML 文件
     def _load_xml(self) -> None:
