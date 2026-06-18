@@ -1,16 +1,3 @@
-"""
-deserialization 模块测试。
-
-输入：
-    sample.arxml       → 构建类型池 + 注册表
-    pcap_output.json   → 消息列表（含 service_id / method_id / payload_hex）
-
-输出：
-    deserialized.json  → 每条消息的解析树
-
-运行：cd deserialization && python test_deserialization.py
-"""
-
 from __future__ import annotations
 
 import json
@@ -18,7 +5,7 @@ import sys
 from pathlib import Path
 
 # 确保项目根目录可导入
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
@@ -31,16 +18,18 @@ logger = get_logger(__name__)
 BASE = Path(__file__).resolve().parent
 ARXML_IN = BASE / "sample.arxml"
 PCAP_OUT = BASE / "pcap_output.json"
-RESULT_OUT = BASE / "deserialized.json"
+RESULT_OUT = BASE / "deserialized_output.json"
 
+# ═══════════════════════════════════════════════════════════════
+# 日志配置
+# ═══════════════════════════════════════════════════════════════
 LOG_CONFIG = dict(level="INFO")
 # LOG_CONFIG = dict(level="DEBUG", log_dir=BASE / "logs")
 
 
 def load_pcap_messages(path: Path) -> list[dict]:
     with path.open("r") as f:
-        data = json.load(f)
-    return data["messages"]
+        return json.load(f)["messages"]
 
 
 def main() -> int:
