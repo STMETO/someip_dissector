@@ -1,4 +1,5 @@
 from .arxml_parser import ArxmlParser, RawBaseType, RawDataType
+from .exporter import export_arxml_report
 from datatypes.types import (
     ArrayType,
     BaseType,
@@ -24,4 +25,5 @@ __all__ = [
     "ArrayType",
     "TypeFactory",
     "ServiceRegistry",
+    "export_arxml_report",
 ]
