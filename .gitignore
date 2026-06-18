@@ -5,6 +5,9 @@
 *.log
 /logs/
 
+# 输出文件
+/output/
+
 # Python 编译缓存
 __pycache__/
 *.pyc
