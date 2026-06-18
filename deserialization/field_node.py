@@ -42,6 +42,8 @@ class FieldNode:
     hex: str = ""
     # 子节点列表，每个实例独立空列表，避免多实例共享列表bug
     children: list[FieldNode] = field(default_factory=list)
+    # 内部标记，不参与序列化；to_dict() 据此输出 kind 字段
+    _is_container: bool = field(default=False, repr=False)
 
     # ------------------------------------------------------------------
     # 工厂静态方法：快速创建两种节点，统一封装构造逻辑
@@ -57,22 +59,15 @@ class FieldNode:
     ) -> FieldNode:
         """
         构造叶子节点：用于 BaseType / StringType 单一数值
-        :param name: 字段名
-        :param type_name: 类型名称
-        :param value: 解析后的数字/字符串值
-        :param offset: 二进制起始偏移
-        :param raw: 当前字段原始二进制字节
-        :return: 叶子FieldNode，带value、hex，无children
         """
         return cls(
             name=name,
             type_name=type_name,
             value=value,
             offset=offset,
-            # 字节长度 = 原始二进制字节长度
             byte_size=len(raw),
-            # 原始bytes转16进制，报文调试查看原始数据
             hex=raw.hex(),
+            # _is_container 默认 False
         )
 
     @classmethod
@@ -86,12 +81,6 @@ class FieldNode:
     ) -> FieldNode:
         """
         构造容器节点：用于 StructureType 结构体 / ArrayType 数组
-        :param name: 结构体/数组名称
-        :param type_name: 结构体/数组类型名
-        :param offset: 该复合结构在payload中的起始偏移
-        :param byte_size: 整个结构体/数组总占用字节
-        :param children: 内部所有子字段/数组元素节点列表
-        :return: 容器FieldNode，value=None，hex为空，携带children子树
         """
         return cls(
             name=name,
@@ -99,8 +88,9 @@ class FieldNode:
             value=None,
             offset=offset,
             byte_size=byte_size,
-            hex="",  # 复合结构不存整体hex，子节点各自携带自身原始hex
+            hex="",
             children=children,
+            _is_container=True,
         )
 
     # ------------------------------------------------------------------
@@ -124,7 +114,10 @@ class FieldNode:
         # 叶子节点有解析值，加入value字段
         if self.value is not None:
             node_dict["value"] = self.value
-        # 存在子节点，递归转换所有子节点字典放入children数组
-        if self.children:
+        # 根据内部标记区分容器/叶子；容器始终输出 children（即使为空数组）
+        if self._is_container:
+            node_dict["kind"] = "container"
             node_dict["children"] = [child.to_dict() for child in self.children]
+        else:
+            node_dict["kind"] = "leaf"
         return node_dict

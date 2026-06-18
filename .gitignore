@@ -12,11 +12,18 @@ output/
 __pycache__/
 *.pyc
 
-# json文件
-*.json
-
 # arxml文件
 *.arxml
 
 # sessions
 sessions/
+
+# 前端依赖
+node_modules/
+
+# 全局忽略所有json文件
+*.json
+
+# 例外：强制跟踪这两个前端配置文件（放在 *.json 下方生效）
+!package.json
+!package-lock.json

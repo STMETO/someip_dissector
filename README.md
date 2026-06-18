@@ -167,13 +167,25 @@ python test/test_deserialization/test_deserialization.py
 
 ## 运行 Web 界面
 
-```bash
-# 安装 Web 依赖（首次）
-pip install fastapi uvicorn python-multipart aiofiles websockets
+技术栈：Vue 3 + Element Plus（前端）/ FastAPI（后端），前后端分离。
 
-# 启动服务
-python web/app.py
-# 或: uvicorn web.app:app --host 0.0.0.0 --port 8080
+```bash
+# 1. 安装后端依赖
+pip install fastapi uvicorn python-multipart aiofiles
+
+# 2. 启动后端（端口 8000）
+python web/backend/app.py
+
+# 3. 安装前端依赖（首次）
+cd web/frontend && npm install
+
+# 4. 启动前端开发服务器（端口 3000，自动代理到 8000）
+npm run dev
 ```
 
-浏览器打开 `http://localhost:8080`，上传 pcap + arxml 即可查看解析结果。
+浏览器打开 `http://localhost:3000`，上传 pcap + arxml 开始分析。
+
+| 地址 | 用途 |
+|------|------|
+| `http://localhost:3000` | 前端页面 |
+| `http://localhost:8000/docs` | 后端 API 文档 (Swagger) |
