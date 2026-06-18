@@ -86,18 +86,24 @@ class _StructureBuilder(TypeBuilder):
         return st
 
 
-class _VectorArrayBuilder(TypeBuilder):
-    """处理 CATEGORY="VECTOR" / "ARRAY"
-    ARRAY：定长静态数组；VECTOR：SOME/IP动态向量（带最大长度限制）
-    仅记录元素类型引用字符串、数组长度，不解析元素真实DataType
-    """
+class _ArrayBuilder(TypeBuilder):
+    """处理 CATEGORY="ARRAY" — 定长静态数组。"""
+
     def build(self, raw: RawDataType, factory: TypeFactory) -> DataType:
         return ArrayType(
-            name=raw.name, 
-            path=raw.path,
-            element_type_ref=raw.type_ref,  # 原始元素类型路径，待二次解析
-            element_type=None,              # 元素真实类型留空
-            length=raw.array_size,          # 数组/向量最大长度
+            name=raw.name, path=raw.path,
+            element_type_ref=raw.type_ref, length=raw.array_size,
+        )
+
+
+class _VectorBuilder(TypeBuilder):
+    """处理 CATEGORY="VECTOR" — SOME/IP 动态向量（头部 4B BE 长度）。"""
+
+    def build(self, raw: RawDataType, factory: TypeFactory) -> DataType:
+        return ArrayType(
+            name=raw.name, path=raw.path,
+            element_type_ref=raw.type_ref, length=raw.array_size,
+            is_dynamic=True,
         )
 
 
@@ -123,8 +129,8 @@ class TypeFactory:
         "VALUE": _ValueBuilder(),
         "TYPE_REFERENCE": _TypeReferenceBuilder(),
         "STRUCTURE": _StructureBuilder(),
-        "VECTOR": _VectorArrayBuilder(),
-        "ARRAY": _VectorArrayBuilder(),
+        "VECTOR": _VectorBuilder(),
+        "ARRAY": _ArrayBuilder(),
         "STRING": _StringBuilder(),
     }
 
