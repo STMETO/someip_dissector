@@ -1,45 +1,45 @@
-"""文件上传处理器：接收 pcap 和 arxml，保存到会话临时目录。"""
-
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
-from pywebio.input import file_upload
-from pywebio.output import put_markdown, put_text, toast
+from fastapi import UploadFile
 
-from web.utils.session import SessionManager
+from web.utils.session import SessionManager, SessionWorkspace
+
+_PCAP_SUFFIXES = {".pcap", ".pcapng", ".cap"}
+_ARXML_SUFFIXES = {".arxml", ".xml"}
 
 
-def handle_upload(session: SessionManager) -> tuple[Path | None, Path | None]:
-    """上传 pcap 和 arxml，返回本地路径。
+class InvalidUploadError(ValueError):
+    """Raised when upload fields are missing or invalid."""
 
-    用户可拖拽或选择文件，必须同时上传两个文件。
-    """
-    put_markdown("## 上传文件")
 
-    files = file_upload(
-        "请选择 sample.pcap 和 sample.arxml",
-        accept=".pcap,.arxml,.xml",
-        multiple=True,
-        required=True,
-        placeholder="拖动文件到此处或点击选择",
-    )
+@dataclass(slots=True)
+class UploadBundle:
+    workspace: SessionWorkspace
+    pcap_path: Path
+    arxml_path: Path
 
-    pcap_path = None
-    arxml_path = None
-    for f in files:
-        if f["filename"].lower().endswith((".pcap", ".pcapng")):
-            pcap_path = session.save(f["filename"], f["content"])
-            put_text(f"✓ PCAP: {f['filename']} ({len(f['content'])} bytes)")
-        elif f["filename"].lower().endswith((".arxml", ".xml")):
-            arxml_path = session.save(f["filename"], f["content"])
-            put_text(f"✓ ARXML: {f['filename']} ({len(f['content'])} bytes)")
 
-    if not pcap_path:
-        toast("未上传有效的 pcap 文件", color="error")
-        return None, None
-    if not arxml_path:
-        toast("未上传有效的 arxml 文件", color="error")
-        return None, None
+async def save_upload_bundle(
+    session_manager: SessionManager,
+    pcap_file: UploadFile,
+    arxml_file: UploadFile,
+) -> UploadBundle:
+    _validate_upload(pcap_file, _PCAP_SUFFIXES, "pcap")
+    _validate_upload(arxml_file, _ARXML_SUFFIXES, "arxml")
 
-    return pcap_path, arxml_path
+    workspace = session_manager.create_session()
+    pcap_path = await session_manager.persist_upload(workspace, pcap_file, stem="capture")
+    arxml_path = await session_manager.persist_upload(workspace, arxml_file, stem="schema")
+    return UploadBundle(workspace=workspace, pcap_path=pcap_path, arxml_path=arxml_path)
+
+
+def _validate_upload(upload: UploadFile | None, suffixes: set[str], label: str) -> None:
+    if upload is None or not upload.filename:
+        raise InvalidUploadError(f"缺少 {label} 文件")
+    suffix = Path(upload.filename).suffix.lower()
+    if suffix not in suffixes:
+        allowed = ", ".join(sorted(suffixes))
+        raise InvalidUploadError(f"{label} 文件类型不正确，允许: {allowed}")

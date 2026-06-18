@@ -1,68 +1,111 @@
-"""解析管道：串联 PCAP 解析 → ARXML 编译 → 反序列化。"""
-
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from arxml_parsers import ArxmlParser, ServiceRegistry, TypeFactory
+from deserialization import DeserializationEngine
 from pcap_parsers.parser import SomeIpPcapParser
 from pcap_parsers.strategies import TcpSomeIpStrategy, UdpSomeIpStrategy
-from arxml_parsers import ArxmlParser, TypeFactory, ServiceRegistry
-from deserialization import DeserializationEngine
-from utils.logger import get_logger
-
-logger = get_logger(__name__)
 
 
-def run_analysis_pipeline(
-    pcap_path: Path,
-    arxml_path: Path,
-) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
-    """执行全链路解析，返回 (messages, type_pool_info, registry_info)。
+@dataclass(slots=True)
+class AnalysisArtifacts:
+    messages: list[dict[str, Any]]
+    pcap_summary: dict[str, Any]
+    type_pool_size: int
+    method_count: int
+    event_count: int
+    deserialized_count: int
 
-    Returns
-    -------
-    messages : list[dict]
-        每条消息包含原始字段 + 反序列化树 "tree"。
-    type_pool_info : dict
-        {path: {"kind": ..., "name": ..., "byte_size": ...}}。
-    registry_info : dict
-        {"method_map": {...}, "event_map": {...}}。
-    """
-    # ---- 1. PCAP ----
-    logger.info("Web: parsing pcap %s", pcap_path)
-    parser = SomeIpPcapParser([UdpSomeIpStrategy(), TcpSomeIpStrategy()])
-    pcap_result = parser.parse(pcap_path, Path("/dev/null"))
-    messages = pcap_result["messages"]
-    logger.info("Web: pcap → %d messages", len(messages))
+    def to_export_dict(self) -> dict[str, Any]:
+        return {
+            "summary": {
+                "total_messages": len(self.messages),
+                "deserialized": self.deserialized_count,
+                "missed": len(self.messages) - self.deserialized_count,
+                "type_pool_size": self.type_pool_size,
+                "registry": {
+                    "methods": self.method_count,
+                    "events": self.event_count,
+                },
+                "pcap": self.pcap_summary,
+            },
+            "messages": self.messages,
+        }
 
-    # ---- 2. ARXML ----
-    logger.info("Web: parsing arxml %s", arxml_path)
-    xml_parser = ArxmlParser(arxml_path)
-    xml_parser.parse()
-    type_pool = TypeFactory().build_all(xml_parser.raw_base_types, xml_parser.raw_types)
+
+def build_analysis_payload(
+    artifacts: AnalysisArtifacts,
+    *,
+    session_id: str,
+    export_url: str | None,
+) -> dict[str, Any]:
+    return {
+        "session_id": session_id,
+        "export_url": export_url,
+        "summary": {
+            "total_messages": len(artifacts.messages),
+            "deserialized": artifacts.deserialized_count,
+            "missed": len(artifacts.messages) - artifacts.deserialized_count,
+            "type_pool_size": artifacts.type_pool_size,
+            "registry": {
+                "methods": artifacts.method_count,
+                "events": artifacts.event_count,
+            },
+            "pcap": artifacts.pcap_summary,
+        },
+        "messages": artifacts.messages,
+    }
+
+
+def analyze_capture(pcap_path: Path, arxml_path: Path) -> AnalysisArtifacts:
+    parser = ArxmlParser(arxml_path)
+    parser.parse()
+
+    type_pool = TypeFactory().build_all(parser.raw_base_types, parser.raw_types)
     registry = ServiceRegistry()
-    registry.build(xml_parser.raw_deployments, xml_parser.raw_interfaces)
-    logger.info("Web: arxml → %d types, %d methods, %d events",
-                len(type_pool), registry.method_count, registry.event_count)
+    registry.build(parser.raw_deployments, parser.raw_interfaces)
 
-    # ---- 3. Deserialize ----
+    pcap_parser = SomeIpPcapParser([UdpSomeIpStrategy(), TcpSomeIpStrategy()])
+    pcap_result = pcap_parser.parse(pcap_path, pcap_path.with_suffix(".json"))
+
     engine = DeserializationEngine(type_pool, registry)
-    for msg in messages:
-        tree = engine.deserialize_message(msg)
-        if tree is not None:
-            msg["tree"] = tree.to_dict()
+    messages: list[dict[str, Any]] = []
+    deserialized_count = 0
+    for raw_message in pcap_result["messages"]:
+        message = dict(raw_message)
+        tree = engine.deserialize_message(message)
+        if tree is None:
+            message["parsed"] = None
+            message["parse_status"] = "unresolved"
         else:
-            msg["tree"] = None
+            message["parsed"] = tree.to_dict()
+            message["parse_status"] = "ok"
+            deserialized_count += 1
+        message["message_kind"] = _message_kind_label(
+            message["header"]["message_type"]["dec"]
+        )
+        messages.append(message)
 
-    # 内存中保留的类型信息
-    type_pool_info = {
-        path: {"kind": type(dt).__name__, "name": dt.name, "byte_size": dt.byte_size}
-        for path, dt in sorted(type_pool.items())
-    }
-    registry_info = {
-        "method_map": {str(k): v for k, v in registry._method_map.items()},
-        "event_map": {str(k): v for k, v in registry._event_map.items()},
-    }
+    return AnalysisArtifacts(
+        messages=messages,
+        pcap_summary=pcap_result["summary"],
+        type_pool_size=len(type_pool),
+        method_count=registry.method_count,
+        event_count=registry.event_count,
+        deserialized_count=deserialized_count,
+    )
 
-    return messages, type_pool_info, registry_info
+
+def _message_kind_label(message_type: int) -> str:
+    if message_type in {0x00, 0x01}:
+        return "Request"
+    if message_type == 0x02:
+        return "Notification"
+    if message_type == 0x80:
+        return "Response"
+    if message_type == 0x81:
+        return "Error"
+    return f"0x{message_type:02X}"

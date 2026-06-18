@@ -1,46 +1,103 @@
-"""
-SOME/IP Dissector Web 界面。
-
-启动方式：
-    python web/app.py        # 开发模式，默认 http://localhost:8080
-    uvicorn web.app:app      # 生产模式
-"""
-
 from __future__ import annotations
 
-import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
-# 确保项目根目录在 sys.path 中
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
-
-from pywebio import start_server
-from pywebio.platform.fastapi import webio_routes
-from fastapi import FastAPI
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from web.views.upload_view import show_upload_page
+from utils.logger import setup_logging
+from web.handlers.analysis import analyze_capture, build_analysis_payload
+from web.handlers.upload import InvalidUploadError, save_upload_bundle
+from web.utils.export import save_analysis_export
 from web.utils.session import SessionManager
+from web.views.detail_view import render_detail_view
+from web.views.message_list_view import render_message_list_view
+from web.views.upload_view import render_upload_view
 
-# FastAPI 应用
-app = FastAPI(title="SOME/IP Dissector", description="ARXML + PCAP 全链路解析 Web 界面")
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
 
-# PyWebIO 路由（挂载到 / ）
-app.mount("/static", StaticFiles(directory="web/static"), name="static")
-app.router.routes.extend(webio_routes(lambda: show_upload_page(SessionManager())))
+session_manager = SessionManager()
 
 
-def launch_dev():
-    """开发模式启动（直接运行脚本）。"""
-    start_server(
-        lambda: show_upload_page(SessionManager()),
-        port=8080,
-        debug=True,
-        cdn=False,  # 离线模式，不依赖外部 CDN
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    setup_logging(level="INFO")
+    session_manager.cleanup_expired()
+    yield
+    session_manager.cleanup_expired()
+
+
+app = FastAPI(title="SOME/IP Dissector", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index() -> HTMLResponse:
+    return HTMLResponse(_render_page())
+
+
+@app.post("/api/analyze")
+async def analyze(
+    pcap_file: UploadFile = File(...),
+    arxml_file: UploadFile = File(...),
+    keep_intermediate: bool = Form(False),
+) -> JSONResponse:
+    session_manager.cleanup_expired()
+    try:
+        bundle = await save_upload_bundle(session_manager, pcap_file, arxml_file)
+        artifacts = analyze_capture(bundle.pcap_path, bundle.arxml_path)
+    except InvalidUploadError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"分析失败: {exc}") from exc
+
+    export_url: str | None = None
+    if keep_intermediate:
+        export_path = save_analysis_export(bundle.workspace, artifacts.to_export_dict())
+        export_url = app.url_path_for(
+            "download_export",
+            session_id=bundle.workspace.session_id,
+            filename=export_path.name,
+        )
+
+    payload = build_analysis_payload(
+        artifacts,
+        session_id=bundle.workspace.session_id,
+        export_url=export_url,
     )
+    return JSONResponse(payload)
 
 
-if __name__ == "__main__":
-    launch_dev()
+@app.get("/sessions/{session_id}/exports/{filename}", name="download_export")
+async def download_export(session_id: str, filename: str) -> FileResponse:
+    file_path = session_manager.resolve_export(session_id, filename)
+    if file_path is None:
+        raise HTTPException(status_code=404, detail="导出文件不存在或已清理")
+    return FileResponse(path=file_path, filename=file_path.name, media_type="application/json")
+
+
+def _render_page() -> str:
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SOME/IP Dissector</title>
+  <link rel="stylesheet" href="/static/wireshark.css">
+  <script defer src="/static/app.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
+</head>
+<body>
+  <div class="shell" x-data="dissectorApp()">
+    {render_upload_view()}
+    <main class="workspace">
+      {render_message_list_view()}
+      {render_detail_view()}
+    </main>
+  </div>
+</body>
+</html>
+"""

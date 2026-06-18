@@ -1,66 +1,53 @@
-"""消息列表 UI：以表格形式展示解析消息列表，支持点击回调。"""
-
 from __future__ import annotations
 
-from typing import Any, Callable
 
-from pywebio.output import put_button, put_table, put_text, use_scope
-from pywebio.session import run_js
-
-
-def _msg_type_label(mt: str) -> str:
-    m = {
-        "0x00": "REQ", "0x01": "REQ_NR",
-        "0x02": "NOTIF", "0x80": "RESP", "0x81": "ERR",
-    }
-    return m.get(mt, mt)
-
-
-def show_message_list(
-    messages: list[dict[str, Any]],
-    on_select: Callable[[dict[str, Any]], None],
-) -> None:
-    """渲染消息列表表格，已解析的行可点击查看详情。
-
-    仅展示前 200 条以避免页面卡顿。
-    """
-    if not messages:
-        put_text("无消息数据。")
-        return
-
-    headers = ["#", "Service ID", "Method/Event ID", "Type", "Len", "Status", "Action"]
-    display = messages[:200]
-    rows = []
-    for msg in display:
-        h = msg.get("header", {})
-        srv = h.get("service_id", {}).get("hex", "?")
-        mid = h.get("method_id", {}).get("hex", "?")
-        mt = h.get("message_type", {}).get("hex", "0x00")
-        payload_len = msg.get("payload_length", 0)
-        has_tree = msg.get("tree") is not None
-
-        rows.append([
-            str(msg["index"]),
-            srv,
-            mid,
-            _msg_type_label(mt),
-            str(payload_len),
-            "✓" if has_tree else "✗",
-            put_button("查看", onclick=_wrap_handler(msg, on_select), color="primary", small=True)
-            if has_tree
-            else "",
-        ])
-
-    with use_scope("msg_table", clear=True):
-        put_table([headers] + rows)
-        run_js("window.scrollTo(0, document.body.scrollHeight)")
-
-    if len(messages) > 200:
-        put_text(f"... 仅展示前 200 条，共 {len(messages)} 条")
-
-
-def _wrap_handler(msg: dict[str, Any], on_select: Callable[[dict[str, Any]], None]):
-    def handler():
-        run_js("window.scrollTo(0, document.body.scrollHeight)")
-        on_select(msg)
-    return handler
+def render_message_list_view() -> str:
+    return """
+<section class="pane pane-left">
+  <div class="pane-header">
+    <span>Packet List</span>
+    <span class="pane-header-meta" x-text="summaryLabel()"></span>
+  </div>
+  <div class="table-wrap">
+    <table class="packet-table">
+      <thead>
+        <tr>
+          <th>序号</th>
+          <th>Service ID</th>
+          <th>Method/Event ID</th>
+          <th>类型</th>
+          <th>Payload 长度</th>
+          <th>解析状态</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-if="!messages.length && !isSubmitting">
+          <tr>
+            <td colspan="6" class="empty-state">上传并解析文件后，这里显示 SOME/IP 报文摘要。</td>
+          </tr>
+        </template>
+        <template x-if="isSubmitting">
+          <tr>
+            <td colspan="6" class="empty-state">正在执行 ARXML 构建、PCAP 解析与 payload 反序列化...</td>
+          </tr>
+        </template>
+        <template x-for="message in messages" :key="message.index">
+          <tr x-bind:class="rowClass(message)" x-on:click="selectMessage(message.index)">
+            <td x-text="message.index"></td>
+            <td x-text="message.header.service_id.hex"></td>
+            <td x-text="message.header.method_id.hex"></td>
+            <td>
+              <div class="cell-primary" x-text="message.message_kind"></div>
+              <div class="cell-secondary" x-text="message.transport"></div>
+            </td>
+            <td x-text="message.payload_length"></td>
+            <td>
+              <span class="status-badge" x-bind:class="statusClass(message.parse_status)" x-text="statusLabel(message.parse_status)"></span>
+            </td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+</section>
+"""
