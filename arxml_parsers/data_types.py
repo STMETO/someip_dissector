@@ -58,7 +58,7 @@ class DataType(ABC):
 
 
 class BaseType(DataType):
-    """基础类型（uint8, int32, boolean...）。"""
+    """基础类型（uint8, int32, float, boolean...）。"""
 
     def __init__(
         self,
@@ -68,17 +68,18 @@ class BaseType(DataType):
         bit_length: int = 8,
         byte_order: str = "big",
         is_signed: bool = False,
+        is_float: bool = False,
     ) -> None:
         super().__init__(name, path)
         self.bit_length = bit_length
         self.byte_order = byte_order
         self.is_signed = is_signed
+        self.is_float = is_float
 
     @property
     def byte_size(self) -> int:
         return self.bit_length // 8
 
-    # ---- struct 格式字符映射 ----
     _STRUCT_FMT: dict[tuple[int, bool, str], str] = {
         (8, False, "big"): ">B",   (8, False, "little"): "<B",
         (16, False, "big"): ">H",  (16, False, "little"): "<H",
@@ -90,11 +91,12 @@ class BaseType(DataType):
         (64, True, "big"): ">q",   (64, True, "little"): "<q",
     }
 
-    # 浮点格式映射（从 SW-BASE-TYPE encoding 推断）
-    _FLOAT_ENC = {"IEEE754": {32: ">f", 64: ">d"}}
-
     def _struct_fmt(self) -> str:
-        """返回 struct.unpack 的格式字符串。"""
+        if self.is_float:
+            if self.bit_length == 32:
+                return ">f" if self.byte_order == "big" else "<f"
+            if self.bit_length == 64:
+                return ">d" if self.byte_order == "big" else "<d"
         return self._STRUCT_FMT.get(
             (self.bit_length, self.is_signed, self.byte_order), ">B"
         )
@@ -105,9 +107,11 @@ class BaseType(DataType):
         fmt = self._struct_fmt()
         value = struct.unpack(fmt, raw)[0]
         return _import_field_node().leaf(name=name, type_name=self.name,
-                              value=value, offset=offset, raw=raw)
+                                         value=value, offset=offset, raw=raw)
 
     def __repr__(self) -> str:
+        if self.is_float:
+            return f"<{type(self).__name__} f{self.bit_length} {self.name!r}>"
         sign = "i" if self.is_signed else "u"
         order = "le" if self.byte_order == "little" else ""
         return f"<{type(self).__name__} {sign}{self.bit_length}{order} {self.name!r}>"
@@ -177,9 +181,7 @@ class StructureType(DataType):
             offset += f.byte_size
 
     def deserialize(self, payload: bytes, offset: int, name: str) -> FieldNode:
-        self.resolve_offsets()
-        total = self.byte_size
-        # 防御：payload 不足时截断
+        total = self.byte_size  # 属性内部已调用 resolve_offsets()
         available = max(0, len(payload) - offset)
         if total > available:
             total = available

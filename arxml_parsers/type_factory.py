@@ -49,13 +49,14 @@ class _ValueBuilder(TypeBuilder):
         # 通过工厂查找该类型名对应的底层SW-BASE-TYPE原始数据
         bt = factory.resolve_base_type(raw.name)
         if bt is not None:
-            # 匹配到基础类型，封装为可计算的BaseType运行时对象
+            # 判断是否为浮点（SW-BASE-TYPE encoding = IEEE754）
+            is_float = "IEEE754" in bt.encoding.upper()
             return BaseType(
                 name=raw.name, path=raw.path,
-                bit_length=bt.bit_size,         # # 从SW-BASE-TYPE读取比特长度
+                bit_length=bt.bit_size,
                 byte_order=_map_byte_order(bt.byte_order),
-                # # 根据名称判断是否有符号：int/sint开头为有符号
                 is_signed="int" in bt.name.lower() or "sint" in bt.name.lower(),
+                is_float=is_float,
             )
         # 兜底：匹配失败返回默认32位基础类型，防止解析中断
         return BaseType(name=raw.name, path=raw.path, bit_length=32)

@@ -23,6 +23,8 @@ _REQUEST_TYPES = {0x00, 0x01}       # REQUEST / REQUEST_NO_RETURN
 _RESPONSE_TYPES = {0x80}             # RESPONSE
 _ERROR_TYPES = {0x81}                # ERROR
 _NOTIFICATION_TYPES = {0x02}         # NOTIFICATION（事件）
+# SOME/IP 线上 event_id = ARXML 部署 event_id | 0x8000
+_EVENT_ID_MASK = 0x7FFF
 
 
 class DeserializationEngine:
@@ -63,7 +65,12 @@ class DeserializationEngine:
 
         # 2. 查注册表 → 类型路径
         if direction == "notification":
+            # SOME/IP 通知的 method_id 字段实际存放 event_id，线上值 = ARXML 部署值 | 0x8000
             type_path = self._registry.lookup_event(srv_id, method_id)
+            if type_path is None:
+                type_path = self._registry.lookup_event(
+                    srv_id, method_id & _EVENT_ID_MASK
+                )
         else:
             type_path = self._registry.lookup_method(srv_id, method_id, direction)
 
