@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from arxml_parsers.data_types import DataType
+from datatypes.types import DataType
 from deserialization.field_node import FieldNode
 from utils.logger import get_logger
 

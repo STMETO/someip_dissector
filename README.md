@@ -41,14 +41,17 @@ someip_dissector/
 │   ├── strategies.py                   # 策略模式：UDP 单包解析 / TCP 流重组
 │   └── parser.py                       # 调度器，遍历 pcap 帧 → 分发策略 → 写 JSON
 │
+├── datatypes/                          ✅
+│   ├── __init__.py                     # 包导出
+│   └── types.py                        # DataType 类族（BaseType / BoolType / StructureType / ArrayType / StringType）
+│
 ├── arxml_parsers/                      ✅
 │   ├── __init__.py                     # 包导出
 │   ├── arxml_parser.py                 # lxml 提取 SW-BASE-TYPE、STD-CPP 类型、接口、部署
-│   ├── data_types.py                   # DataType 类族（BaseType / StructureType / ArrayType / StringType）
 │   ├── type_factory.py                 # Factory + Builder 模式构建 DataType 对象池
 │   └── service_registry.py             # Registry 模式：(srv_id, method_id, msg_type) → type_path
 │
-├── deserialization/                    ⬜
+├── deserialization/                    ✅
 │   ├── engine.py                       # 反序列化引擎
 │   └── field_node.py                   # 字段树节点
 │
@@ -96,7 +99,7 @@ sample.pcap
 
 ### arxml_parsers — 服务定义编译
 
-**阅读顺序**：`arxml_parser.py` → `data_types.py` → `type_factory.py` → `service_registry.py`
+**阅读顺序**：`datatypes/types.py` → `arxml_parser.py` → `type_factory.py` → `service_registry.py`
 
 ```
 sample.arxml

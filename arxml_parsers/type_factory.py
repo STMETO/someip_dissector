@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 from typing import ClassVar
 
 from .arxml_parser import RawBaseType, RawDataType
-from .data_types import (
+from datatypes.types import (
     ArrayType,
     BaseType,
     BoolType,

@@ -1,5 +1,5 @@
 from .arxml_parser import ArxmlParser, RawBaseType, RawDataType
-from .data_types import (
+from datatypes.types import (
     ArrayType,
     BaseType,
     BoolType,
