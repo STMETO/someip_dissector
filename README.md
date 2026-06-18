@@ -12,6 +12,7 @@
 
 ```bash
 pip install scapy lxml typing_extensions
+pip install fastapi uvicorn python-multipart aiofiles websockets
 ```
 
 | 依赖 | 用途 |
@@ -55,15 +56,14 @@ someip_dissector/
 │   ├── engine.py                       # 反序列化引擎
 │   └── field_node.py                   # 字段树节点
 │
-├── output/                             ⬜
-│   ├── text_visitor.py                 # 控制台树形输出
-│   ├── json_visitor.py                 # JSON 序列化
-│   └── html_visitor.py                 # HTML 可视化
+├── output/                             ✅
 │
-├── web/                                ⬜
-│   ├── app.py                          # Web 入口
-│   ├── templates/
-│   └── static/
+├── web/                                ✅
+│   ├── app.py                          # FastAPI 入口（uvicorn 启动）
+│   ├── handlers/                       # 上传、解析管道业务逻辑
+│   ├── views/                          # 页面 HTML 片段
+│   ├── utils/                          # 会话管理、导出
+│   └── static/                         # CSS / JS 静态资源
 │
 ├── utils/                              ✅
 │   ├── __init__.py
@@ -71,7 +71,8 @@ someip_dissector/
 │
 ├── test/                               ✅
 │   ├── test_pcap_parsers/              # PCAP 解析单元测试
-│   └── test_arxml_parsers/             # ARXML 解析单元测试
+│   ├── test_arxml_parsers/             # ARXML 解析单元测试
+│   └── test_deserialization/           # 反序列化单元测试
 │
 ├── Tools/                              ✅
 │   └── generate_sample_pcap.py         # 纯 Python 生成测试用 pcap
@@ -157,4 +158,22 @@ python test/test_pcap_parsers/test_pcap_parsers.py
 
 # ARXML 解析
 python test/test_arxml_parsers/test_arxml_parsers.py
+
+# 反序列化
+python test/test_deserialization/test_deserialization.py
 ```
+
+---
+
+## 运行 Web 界面
+
+```bash
+# 安装 Web 依赖（首次）
+pip install fastapi uvicorn python-multipart aiofiles websockets
+
+# 启动服务
+python web/app.py
+# 或: uvicorn web.app:app --host 0.0.0.0 --port 8080
+```
+
+浏览器打开 `http://localhost:8080`，上传 pcap + arxml 即可查看解析结果。
