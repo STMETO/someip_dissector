@@ -13,6 +13,7 @@ from .arxml_parser import RawBaseType, RawDataType
 from .data_types import (
     ArrayType,
     BaseType,
+    BoolType,
     DataType,
     StringType,
     StructField,
@@ -40,17 +41,15 @@ class TypeBuilder(ABC):
 
 
 class _ValueBuilder(TypeBuilder):
-    """处理 CATEGORY="VALUE" 类型
-    VALUE：简单包装SW-BASE-TYPE，等价C语言typedef uint32_t MyUint32;
-    作用：根据类型名称匹配底层SW-BASE-TYPE，生成完整BaseType基础类型对象
-    """
+    """处理 CATEGORY="VALUE" — 根据 SW-BASE-TYPE 生成基础类型对象。"""
 
     def build(self, raw: RawDataType, factory: TypeFactory) -> DataType:
-        # 通过工厂查找该类型名对应的底层SW-BASE-TYPE原始数据
         bt = factory.resolve_base_type(raw.name)
         if bt is not None:
-            # 判断是否为浮点（SW-BASE-TYPE encoding = IEEE754）
             is_float = "IEEE754" in bt.encoding.upper()
+            is_bool = bt.name.lower() in ("boolean", "bool")
+            if is_bool:
+                return BoolType(name=raw.name, path=raw.path)
             return BaseType(
                 name=raw.name, path=raw.path,
                 bit_length=bt.bit_size,
@@ -58,7 +57,6 @@ class _ValueBuilder(TypeBuilder):
                 is_signed="int" in bt.name.lower() or "sint" in bt.name.lower(),
                 is_float=is_float,
             )
-        # 兜底：匹配失败返回默认32位基础类型，防止解析中断
         return BaseType(name=raw.name, path=raw.path, bit_length=32)
 
 

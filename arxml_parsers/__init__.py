@@ -2,6 +2,7 @@ from .arxml_parser import ArxmlParser, RawBaseType, RawDataType
 from .data_types import (
     ArrayType,
     BaseType,
+    BoolType,
     DataType,
     StringType,
     StructField,
@@ -16,6 +17,7 @@ __all__ = [
     "RawDataType",
     "DataType",
     "BaseType",
+    "BoolType",
     "StringType",
     "StructureType",
     "StructField",

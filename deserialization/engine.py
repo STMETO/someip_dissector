@@ -90,7 +90,8 @@ class DeserializationEngine:
         payload = bytes.fromhex(payload_hex)
 
         try:
-            return dt.deserialize(payload, offset=0, name=type_path)
+            tree, _consumed = dt.deserialize(payload, offset=0, name=type_path)
+            return tree
         except Exception:
             logger.debug("Deserialize failed for %s (payload %d bytes)",
                          type_path, len(payload), exc_info=True)
