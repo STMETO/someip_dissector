@@ -3,10 +3,10 @@
 
 # 日志文件
 *.log
-/logs/
+logs/
 
 # 输出文件
-/output/
+output/
 
 # Python 编译缓存
 __pycache__/
@@ -17,3 +17,6 @@ __pycache__/
 
 # arxml文件
 *.arxml
+
+# sessions
+sessions/
