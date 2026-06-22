@@ -9,29 +9,64 @@ export default {
       if (!props.message) return h('div', { class: 'tree-empty' }, '点击左侧行查看解析详情')
       const hdr = props.message
       const st = hdr.parse_status
-      const statusLabel = st === 'sd' ? 'SOME/IP-SD' : st === 'unresolved' ? '未解析' : ''
+      const statusChip = _statusChip(st)
+      const sections = []
+
+      // ---- Raw PCAP View（始终显示）----
+      if (hdr.raw_view) {
+        sections.push(
+          h('div', { class: 'tree-section' }, [
+            h('div', { class: 'tree-section-bar' }, [
+              h('span', { class: 'tree-section-icon' }, '📦'),
+              h('span', null, 'Raw PCAP View'),
+              h('span', { class: 'tree-section-type mono' }, '(原始协议数据)'),
+            ]),
+            h(TreeNode, { node: hdr.raw_view, depth: 0, key: 'raw-root' }),
+          ])
+        )
+      }
+
+      // ---- Deserialized View（仅 ok 消息）----
+      if (hdr.parsed && st === 'ok') {
+        sections.push(
+          h('div', { class: 'tree-section' }, [
+            h('div', { class: 'tree-section-bar' }, [
+              h('span', { class: 'tree-section-icon' }, '🔍'),
+              h('span', null, 'Deserialized'),
+              h('span', { class: 'tree-section-type mono' }, '(ARXML 类型解析)'),
+            ]),
+            h(TreeNode, { node: hdr.parsed, depth: 0, key: 'parsed-root' }),
+          ])
+        )
+      }
+
       return h('div', { class: 'tree-panel' }, [
         h('div', { class: 'tree-info' }, [
           h('span', { class: 'tree-info-chip mono' }, `${hdr.service_id} / ${hdr.method_id}`),
           h('span', { class: 'tree-info-chip' }, hdr.message_kind),
           h('span', { class: 'tree-info-chip' }, `${hdr.payload_length} bytes`),
-          statusLabel ? h('span', { class: `tree-info-chip tree-status-${st}` }, statusLabel) : null,
+          statusChip ? h('span', { class: `tree-info-chip ${statusChip.cls}` }, statusChip.label) : null,
         ]),
-        h('div', { class: 'tree-scroll' }, [
-          h(TreeNode, { node: props.message.parsed, depth: 0, key: 'root' }),
-        ]),
+        h('div', { class: 'tree-scroll' }, sections),
       ])
     }
   },
 }
 
-// 递归树节点
+// ---- 状态标签 ----
+function _statusChip(st) {
+  if (st === 'sd') return { label: 'SOME/IP-SD', cls: 'tree-status-sd' }
+  if (st === 'unresolved') return { label: '未解析', cls: 'tree-status-unresolved' }
+  if (st === 'ok') return { label: '已解析', cls: 'tree-status-ok' }
+  return null
+}
+
+// ---- 递归树节点 ----
 const TreeNode = {
   name: 'TreeNode',
   props: { node: Object, depth: { type: Number, default: 0 } },
   setup(p) {
     const isRoot = p.depth === 0
-    // 根节点默认展开，子节点默认收起
     const open = ref(isRoot)
     const ch = computed(() => p.node.children || [])
     const hasKids = computed(() => ch.value.length > 0)
@@ -51,15 +86,16 @@ const TreeNode = {
               type: 'button',
               onClick: () => { open.value = !open.value },
             }, open.value ? '▾' : '▸'),
-            meta ? h('span', { class: `tn-badge tn-badge-${meta}` }, meta === 'sd' ? 'SOME/IP-SD' : 'UNRESOLVED') : null,
+            meta ? h('span', { class: `tn-badge tn-badge-${meta}` },
+              meta === 'sd' ? 'SOME/IP-SD' : meta === 'unresolved' ? 'UNRESOLVED' : meta
+            ) : null,
             h('span', { class: 'tn-label' }, p.node.name),
             h('span', { class: 'tn-type', title: p.node.type || '' }, p.node.type || '—'),
             h('span', { class: 'tn-meta' }, `${p.node.byte_size}B @${p.node.offset}`),
           ]),
           open.value ? h('div', { class: 'tn-children' },
             ch.value.map((c, i) => h(TreeNode, {
-              node: c,
-              depth: p.depth + 1,
+              node: c, depth: p.depth + 1,
               key: `${c.name}-${c.offset}-${i}`,
             }))
           ) : null,
@@ -100,8 +136,22 @@ function _formatVal(v) {
 }
 .tree-status-sd { color: #e6a23c; border-color: #f5dab1; background: #fef8f0; font-weight: 600; }
 .tree-status-unresolved { color: #f56c6c; border-color: #fbc4c4; background: #fef0f0; font-weight: 600; }
-.tree-scroll { flex: 1; overflow: auto; padding: 10px 8px 18px; background: linear-gradient(180deg, #fff, #fafcff); }
+.tree-status-ok { color: #67c23a; border-color: #b9dfc5; background: #edfaf2; font-weight: 600; }
+.tree-scroll { flex: 1; overflow: auto; padding: 4px 8px 18px; background: linear-gradient(180deg, #fff, #fafcff); }
 .tree-empty { color: #909399; text-align: center; padding: 60px 0; font-size: 15px; }
+
+/* ---- 分区标题 ---- */
+.tree-section { margin-top: 6px; }
+.tree-section-bar {
+  padding: 6px 12px; font-size: 13px; font-weight: 600; color: #303133;
+  background: linear-gradient(180deg, #f5f8fc, #eef2f7);
+  border: 1px solid #dde5ef; border-radius: 6px; margin-bottom: 4px;
+  display: flex; align-items: center; gap: 6px;
+}
+.tree-section-icon { font-size: 14px; }
+.tree-section-type { font-weight: 400; color: #909399; font-size: 12px; margin-left: 4px; }
+
+/* ---- 树节点 ---- */
 .tn { font-family: 'Consolas','Courier New',monospace; font-size: 14px; position: relative; }
 .tn-row {
   display: flex; align-items: center; gap: 8px; padding-top: 3px; padding-bottom: 3px;
@@ -136,7 +186,6 @@ function _formatVal(v) {
   color: #c0c4cc; font-size: 12px; margin-left: 8px; word-break: break-all;
   user-select: text;
 }
-/* ---- 状态徽标 ---- */
 .tn-badge {
   display: inline-flex; align-items: center; min-height: 20px; padding: 0 7px;
   border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
@@ -144,4 +193,5 @@ function _formatVal(v) {
 }
 .tn-badge-sd { color: #b88230; background: #fef6ed; border: 1px solid #f0d199; }
 .tn-badge-unresolved { color: #c45656; background: #fef0f0; border: 1px solid #f1b6b6; }
+.tn-badge-raw { color: #6c7a8d; background: #f0f3f7; border: 1px solid #c8d2de; }
 </style>
