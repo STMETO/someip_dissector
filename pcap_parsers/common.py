@@ -263,6 +263,23 @@ def build_error_dict(
 
 
 # ======================================================================
+# SOME/IP 报文类型 → 可读标签
+# ======================================================================
+
+def message_type_label(message_type: int) -> str:
+    """将 SOME/IP message_type 数值转为可读标签。"""
+    if message_type in {0x00, 0x01}:
+        return "Request"
+    if message_type == 0x02:
+        return "Notification"
+    if message_type == 0x80:
+        return "Response"
+    if message_type == 0x81:
+        return "Error"
+    return f"0x{message_type:02X}"
+
+
+# ======================================================================
 # SOME/IP-SD 常量与类型映射表
 # ======================================================================
 
