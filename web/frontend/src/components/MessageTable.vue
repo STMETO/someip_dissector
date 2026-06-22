@@ -11,14 +11,23 @@ const pageSize = 100
 
 const filtered = computed(() => {
   if (!props.searchText) return props.messages || []
-  const q = props.searchText.toLowerCase()
+  const tokens = props.searchText
+    .toLowerCase()
+    .split(/\s+/)
+    .map(v => v.trim())
+    .filter(Boolean)
+
   return (props.messages || []).filter(m =>
-    String(m.index).includes(q) ||
-    String(m.frame_index).includes(q) ||
-    String(m.payload_length).includes(q) ||
-    String(m.service_id).toLowerCase().includes(q) ||
-    String(m.method_id).toLowerCase().includes(q) ||
-    String(m.message_kind).toLowerCase().includes(q)
+    tokens.every(q => [
+      String(m.index),
+      String(m.frame_index),
+      String(m.payload_length),
+      String(m.service_id),
+      String(m.method_id),
+      String(m.message_kind),
+      String(m.parse_status),
+      String(m.transport || ''),
+    ].some(field => field.toLowerCase().includes(q)))
   )
 })
 
@@ -36,19 +45,29 @@ function goPage(v) {
   const n = parseInt(v, 10)
   if (n >= 1 && n <= totalPages.value) currentPage.value = n
 }
+
+function clearSearch() {
+  emit('update:searchText', '')
+}
 </script>
 
 <template>
   <div class="msg-panel">
     <div class="msg-header">
-      <span>消息列表 ({{ filtered.length }} 条)
+      <div class="msg-title-block">
+        <span class="msg-title">消息列表 ({{ filtered.length }} 条)
         <template v-if="!loading && props.messages?.length">
           · 已解析 {{ props.messages.filter(m => m.parse_status === 'ok').length }}
         </template>
-      </span>
-      <input class="search-input" placeholder="搜索序号/帧号/长度/ID/类型..."
-             :value="searchText"
-             @input="emit('update:searchText', $event.target.value)">
+        </span>
+        <span class="msg-subtitle">支持多关键字组合搜索，如 0x1234 response ok</span>
+      </div>
+      <div class="search-box">
+        <input class="search-input" placeholder="搜索序号/帧号/长度/ID/类型/状态/协议..."
+               :value="searchText"
+               @input="emit('update:searchText', $event.target.value)">
+        <button v-if="searchText" class="search-clear" @click="clearSearch">清空</button>
+      </div>
     </div>
     <div class="msg-table-wrap">
       <table class="msg-table">
@@ -59,13 +78,14 @@ function goPage(v) {
             <th style="width:80px">Service ID</th>
             <th style="width:100px">Method/Event</th>
             <th style="width:70px">msg_type</th>
+            <th style="width:52px">协议</th>
             <th style="width:45px">长度</th>
             <th style="width:55px">状态</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-if="loading"><td colspan="7" class="empty">解析中...</td></tr>
-          <tr v-else-if="!paged.length"><td colspan="7" class="empty">无匹配结果</td></tr>
+          <tr v-if="loading"><td colspan="8" class="empty">解析中...</td></tr>
+          <tr v-else-if="!paged.length"><td colspan="8" class="empty">无匹配结果</td></tr>
           <tr v-for="m in paged" :key="m.index"
               :class="{ selected: m.index === selectedIndex }"
               class="msg-row"
@@ -75,6 +95,7 @@ function goPage(v) {
             <td class="mono">{{ m.service_id }}</td>
             <td class="mono">{{ m.method_id }}</td>
             <td class="mono">{{ m.message_kind }}</td>
+            <td class="mono">{{ m.transport || '-' }}</td>
             <td class="mono" style="text-align:right">{{ m.payload_length }}</td>
             <td>
               <span class="tag" :class="m.parse_status === 'ok' ? 'tag-ok' : 'tag-fail'">
@@ -98,32 +119,47 @@ function goPage(v) {
 .msg-panel { display: flex; flex-direction: column; height: 100%; }
 .msg-header {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 6px 10px; background: #f5f7fa; border-bottom: 1px solid #ebeef5;
-  font-size: 13px; flex-shrink: 0;
+  padding: 10px 12px; background: linear-gradient(180deg, #f9fbfd, #f1f5f9);
+  border-bottom: 1px solid #e5ebf2; font-size: 13px; flex-shrink: 0; gap: 12px;
+}
+.msg-title-block { display: flex; flex-direction: column; gap: 4px; }
+.msg-title { font-weight: 700; color: #303133; }
+.msg-subtitle { color: #909399; font-size: 12px; }
+.search-box { display: flex; align-items: center; gap: 8px; }
+.search-clear {
+  border: 1px solid #d0d8e4; background: #fff; border-radius: 7px; padding: 5px 10px;
+  font-size: 12px; cursor: pointer; color: #606266;
 }
 .search-input {
-  width: 200px; padding: 3px 8px; border: 1px solid #dcdfe6; border-radius: 3px;
-  font-size: 12px; outline: none;
+  width: 280px; padding: 7px 10px; border: 1px solid #d4dbe6; border-radius: 7px;
+  font-size: 12px; outline: none; background: #fff;
 }
+.search-input:focus { border-color: #409eff; box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.12); }
 .msg-table-wrap { flex: 1; overflow: auto; }
-.msg-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.msg-table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
 .msg-table th {
-  position: sticky; top: 0; background: #f5f7fa; padding: 4px 6px;
-  text-align: left; border-bottom: 1px solid #ebeef5; font-weight: 600; z-index: 1;
+  position: sticky; top: 0; background: #f7fafd; padding: 7px 8px;
+  text-align: left; border-bottom: 1px solid #e5ebf2; font-weight: 700; z-index: 1;
 }
-.msg-table td { padding: 3px 6px; border-bottom: 1px solid #f2f2f2; }
+.msg-table td { padding: 6px 8px; border-bottom: 1px solid #f1f4f8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg-row { cursor: pointer; }
+.msg-row:nth-child(even) { background: #fcfdff; }
 .msg-row:hover { background: #f0f7ff; }
-.msg-row.selected { background: #ecf5ff; }
+.msg-row.selected { background: #e6f2ff; box-shadow: inset 3px 0 0 #409eff; }
 .mono { font-family: 'Consolas','Courier New',monospace; }
 .empty { text-align: center; color: #999; padding: 20px; }
-.tag { font-size: 11px; padding: 1px 6px; border-radius: 3px; }
+.tag { font-size: 11px; padding: 2px 7px; border-radius: 999px; }
 .tag-ok { background: #e1f3d8; color: #67c23a; }
 .tag-fail { background: #fef0f0; color: #f56c6c; }
 .msg-footer {
   display: flex; justify-content: center; align-items: center; gap: 6px;
-  padding: 6px; border-top: 1px solid #ebeef5; font-size: 12px; flex-shrink: 0;
+  padding: 8px; border-top: 1px solid #e5ebf2; font-size: 12px; flex-shrink: 0; background: #fafcff;
 }
-.msg-footer button { padding: 2px 10px; cursor: pointer; }
+.msg-footer button { padding: 4px 12px; cursor: pointer; border: 1px solid #d0d8e4; background: #fff; border-radius: 6px; }
 .page-num { border: 1px solid #dcdfe6; border-radius: 2px; padding: 2px 4px; font-size: 12px; }
+@media (max-width: 900px) {
+  .msg-header { flex-direction: column; align-items: stretch; }
+  .search-box { width: 100%; }
+  .search-input { width: 100%; }
+}
 </style>

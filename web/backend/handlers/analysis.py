@@ -90,6 +90,23 @@ async def run_upload_and_parse(
         msg["message_kind"] = _label(msg["header"]["message_type"]["dec"])
         messages.append(msg)
 
+    if keep_temp:
+        export_dir = session_dir / "export"
+        with (export_dir / "deserialized_output.json").open("w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "summary": {
+                        "total_messages": len(messages),
+                        "parsed_count": parsed_count,
+                        "unresolved_count": len(messages) - parsed_count,
+                    },
+                    "messages": messages,
+                },
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
+
     state = _SessionState(
         session_id=session_id,
         session_dir=session_dir,

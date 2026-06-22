@@ -5,6 +5,8 @@ import MessageTable from './components/MessageTable.vue'
 import ParseTree from './components/ParseTree.vue'
 import { fetchMessages, fetchMessageDetail, deleteSession, exportUrl } from './api'
 
+const SPLIT_STORAGE_KEY = 'someip-ui-split-percent'
+
 const sessionId = ref('')
 const summary = reactive({ total_messages: 0, parsed_count: 0 })
 const hasExport = ref(false)
@@ -18,7 +20,7 @@ const progress = ref(0)         // 0-100, 消息加载进度
 const progressText = ref('')
 
 // 分割条位置 (左栏百分比)
-const splitPercent = ref(60)
+const splitPercent = ref(_loadSplitPercent())
 const dragging = ref(false)
 
 function onDragStart(e) {
@@ -28,12 +30,18 @@ function onDragStart(e) {
 }
 function onDrag(e) {
   const pct = (e.clientX / window.innerWidth) * 100
-  splitPercent.value = Math.max(20, Math.min(80, pct))
+  splitPercent.value = Math.max(30, Math.min(72, pct))
 }
 function onDragEnd() {
   dragging.value = false
   document.removeEventListener('mousemove', onDrag)
   document.removeEventListener('mouseup', onDragEnd)
+  window.localStorage.setItem(SPLIT_STORAGE_KEY, String(splitPercent.value))
+}
+
+function resetSplit() {
+  splitPercent.value = 46
+  window.localStorage.setItem(SPLIT_STORAGE_KEY, String(splitPercent.value))
 }
 
 async function onParsed(res) {
@@ -66,10 +74,19 @@ async function onSelect(msg) {
 onUnmounted(() => {
   if (sessionId.value) deleteSession(sessionId.value).catch(() => {})
 })
+
+function _loadSplitPercent() {
+  const raw = window.localStorage.getItem(SPLIT_STORAGE_KEY)
+  const parsed = Number(raw)
+  if (Number.isFinite(parsed) && parsed >= 30 && parsed <= 72) {
+    return parsed
+  }
+  return 46
+}
 </script>
 
 <template>
-  <div class="app-shell">
+  <div class="app-shell" data-v="20250622">
     <UploadBar @parsed="onParsed" :loading="loading || uploading"
                v-model:uploading="uploading"
                :sessionId="sessionId" :hasExport="hasExport" />
@@ -81,6 +98,12 @@ onUnmounted(() => {
         {{ uploading ? '后台解析中，请耐心等待...' : (progressText || '加载中...') }}
       </span>
     </div>
+    <section class="overview-bar" v-if="sessionId">
+      <span class="overview-pill mono">会话 {{ sessionId }}</span>
+      <span class="overview-pill">报文 {{ summary.total_messages || 0 }}</span>
+      <span class="overview-pill is-ok">已解析 {{ summary.parsed_count || 0 }}</span>
+      <span class="overview-pill">导出 {{ hasExport ? '开启' : '关闭' }}</span>
+    </section>
     <div class="workspace" v-if="sessionId">
       <div class="pane pane-left" :style="{ width: splitPercent + '%' }">
         <MessageTable :messages="messages" :loading="loading"
@@ -88,7 +111,9 @@ onUnmounted(() => {
                       v-model:searchText="searchText"
                       @select="onSelect" />
       </div>
-      <div class="splitter" @mousedown.prevent="onDragStart"></div>
+      <div class="splitter" @mousedown.prevent="onDragStart" @dblclick="resetSplit" title="拖动调整比例，双击恢复默认布局">
+        <span class="splitter-handle"></span>
+      </div>
       <div class="pane pane-right" :style="{ width: (100 - splitPercent) + '%' }">
         <ParseTree :message="selectedMsg" :key="selectedMsg?.index" />
       </div>
@@ -98,17 +123,31 @@ onUnmounted(() => {
 
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-html, body, #app { height: 100%; overflow: hidden; font-family: 'Segoe UI', sans-serif; }
-.app-shell { display: flex; flex-direction: column; height: 100%; }
-.workspace { flex: 1; display: flex; overflow: hidden; }
-.pane { overflow: auto; display: flex; flex-direction: column; }
-.pane-left { min-width: 200px; }
-.pane-right { min-width: 250px; }
-.splitter {
-  width: 5px; cursor: col-resize; background: #dcdfe6;
-  flex-shrink: 0; transition: background .2s;
+html, body, #app {
+  height: 100%; overflow: hidden; font-family: 'Segoe UI', sans-serif;
+  background: linear-gradient(180deg, #edf2f8 0%, #e4eaf1 100%);
+  color: #303133;
 }
-.splitter:hover { background: #409eff; }
+.mono { font-family: 'Consolas','Courier New',monospace; }
+.app-shell { display: flex; flex-direction: column; height: 100%; }
+.workspace { flex: 1; display: flex; overflow: hidden; padding: 10px; gap: 0; min-height: 0; }
+.pane {
+  overflow: auto; display: flex; flex-direction: column; min-height: 0;
+  background: rgba(255,255,255,0.92); border: 1px solid #d8e0ea; border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(31, 45, 61, 0.08);
+}
+.pane-left { min-width: 280px; }
+.pane-right { min-width: 360px; }
+.splitter {
+  width: 14px; cursor: col-resize; flex-shrink: 0; transition: background .2s;
+  display: flex; align-items: center; justify-content: center;
+}
+.splitter-handle {
+  width: 4px; height: 64px; border-radius: 999px;
+  background: linear-gradient(180deg, #c4d3e6, #7ea8df);
+  box-shadow: 0 0 0 1px rgba(126, 168, 223, 0.2);
+}
+.splitter:hover .splitter-handle { background: linear-gradient(180deg, #8ec5ff, #409eff); }
 .progress-bar {
   height: 24px; background: #ecf5ff; position: relative; flex-shrink: 0;
   display: flex; align-items: center;
@@ -120,6 +159,16 @@ html, body, #app { height: 100%; overflow: hidden; font-family: 'Segoe UI', sans
 .progress-text {
   position: absolute; width: 100%; text-align: center; font-size: 12px; color: #303133;
 }
+.overview-bar {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  padding: 8px 10px 0; flex-shrink: 0;
+}
+.overview-pill {
+  display: inline-flex; align-items: center; min-height: 28px; padding: 0 10px;
+  background: rgba(255,255,255,0.86); border: 1px solid #d8e0ea; border-radius: 999px;
+  box-shadow: 0 4px 10px rgba(31, 45, 61, 0.05); font-size: 12px; color: #556273;
+}
+.overview-pill.is-ok { color: #2f8f51; border-color: #b9dfc5; background: rgba(237, 250, 242, 0.96); }
 /* 上传阶段不确定进度条动画 */
 .progress-indeterminate {
   height: 100%; width: 30%; background: linear-gradient(90deg, #409eff, #67c23a);
@@ -128,5 +177,10 @@ html, body, #app { height: 100%; overflow: hidden; font-family: 'Segoe UI', sans
 @keyframes progress-slide {
   0% { margin-left: -30%; }
   100% { margin-left: 100%; }
+}
+@media (max-width: 900px) {
+  .workspace { flex-direction: column; padding: 8px; }
+  .pane-left, .pane-right { width: 100% !important; min-width: 0; min-height: 280px; }
+  .splitter { display: none; }
 }
 </style>
