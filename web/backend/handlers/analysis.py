@@ -73,20 +73,26 @@ async def run_upload_and_parse(
             registry=registry,
         )
 
-    # 3. 反序列化
+    # 3. 反序列化（engine 永不返回 None）
     engine = DeserializationEngine(type_pool, registry)
     messages: list[dict[str, Any]] = []
     parsed_count = 0
     for raw_msg in pcap_result["messages"]:
         msg = dict(raw_msg)
         tree = engine.deserialize_message(msg)
-        if tree is not None:
-            msg["parsed"] = tree.to_dict()
+        tree_dict = tree.to_dict()
+
+        # 根据 meta_kind 确定解析状态
+        meta = tree_dict.get("meta_kind", "")
+        if meta == "sd":
+            msg["parse_status"] = "sd"
+        elif meta == "unresolved":
+            msg["parse_status"] = "unresolved"
+        else:
             msg["parse_status"] = "ok"
             parsed_count += 1
-        else:
-            msg["parsed"] = None
-            msg["parse_status"] = "unresolved"
+
+        msg["parsed"] = tree_dict
         msg["message_kind"] = _label(msg["header"]["message_type"]["dec"])
         messages.append(msg)
 
@@ -181,7 +187,14 @@ def build_message_detail(messages: list[dict[str, Any]], index: int) -> dict | N
                 "payload_hex": m["payload_hex"],
                 "raw_header_hex": m["raw_header_hex"],
                 "parse_status": m.get("parse_status", "unresolved"),
-                "parsed": m.get("parsed"),
+                "parsed": m.get("parsed", {
+                    "name": "(no data)",
+                    "type": "unknown",
+                    "offset": 0,
+                    "byte_size": 0,
+                    "kind": "leaf",
+                    "value": "(empty)",
+                }),
             }
 
 

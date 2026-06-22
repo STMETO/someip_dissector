@@ -49,6 +49,17 @@ function goPage(v) {
 function clearSearch() {
   emit('update:searchText', '')
 }
+
+function statusLabel(s) {
+  if (s === 'ok') return '已解析'
+  if (s === 'sd') return 'SD'
+  return '未解析'
+}
+function statusClass(s) {
+  if (s === 'ok') return 'tag-ok'
+  if (s === 'sd') return 'tag-sd'
+  return 'tag-fail'
+}
 </script>
 
 <template>
@@ -63,7 +74,7 @@ function clearSearch() {
         <span class="msg-subtitle">支持多关键字组合搜索，如 0x1234 response ok</span>
       </div>
       <div class="search-box">
-        <input class="search-input" placeholder="搜索序号/帧号/长度/ID/类型/状态/协议..."
+        <input class="search-input" placeholder="搜索序号/帧号/长度/ID/类型/状态(sd/ok)/协议..."
                :value="searchText"
                @input="emit('update:searchText', $event.target.value)">
         <button v-if="searchText" class="search-clear" @click="clearSearch">清空</button>
@@ -98,8 +109,8 @@ function clearSearch() {
             <td class="mono">{{ m.transport || '-' }}</td>
             <td class="mono" style="text-align:right">{{ m.payload_length }}</td>
             <td>
-              <span class="tag" :class="m.parse_status === 'ok' ? 'tag-ok' : 'tag-fail'">
-                {{ m.parse_status === 'ok' ? '已解析' : '未解析' }}
+              <span class="tag" :class="statusClass(m.parse_status)">
+                {{ statusLabel(m.parse_status) }}
               </span>
             </td>
           </tr>
@@ -150,6 +161,7 @@ function clearSearch() {
 .empty { text-align: center; color: #999; padding: 20px; }
 .tag { font-size: 11px; padding: 2px 7px; border-radius: 999px; }
 .tag-ok { background: #e1f3d8; color: #67c23a; }
+.tag-sd { background: #fef6ed; color: #e6a23c; }
 .tag-fail { background: #fef0f0; color: #f56c6c; }
 .msg-footer {
   display: flex; justify-content: center; align-items: center; gap: 6px;

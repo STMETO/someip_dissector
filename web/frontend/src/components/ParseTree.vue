@@ -7,13 +7,15 @@ export default {
   setup(props) {
     return () => {
       if (!props.message) return h('div', { class: 'tree-empty' }, '点击左侧行查看解析详情')
-      if (!props.message.parsed) return h('div', { class: 'tree-empty tree-fail' }, '该消息无法解析（类型未注册或数据异常）')
       const hdr = props.message
+      const st = hdr.parse_status
+      const statusLabel = st === 'sd' ? 'SOME/IP-SD' : st === 'unresolved' ? '未解析' : ''
       return h('div', { class: 'tree-panel' }, [
         h('div', { class: 'tree-info' }, [
           h('span', { class: 'tree-info-chip mono' }, `${hdr.service_id} / ${hdr.method_id}`),
           h('span', { class: 'tree-info-chip' }, hdr.message_kind),
           h('span', { class: 'tree-info-chip' }, `${hdr.payload_length} bytes`),
+          statusLabel ? h('span', { class: `tree-info-chip tree-status-${st}` }, statusLabel) : null,
         ]),
         h('div', { class: 'tree-scroll' }, [
           h(TreeNode, { node: props.message.parsed, depth: 0, key: 'root' }),
@@ -23,36 +25,36 @@ export default {
   },
 }
 
-// 递归树节点 — 可折叠
+// 递归树节点
 const TreeNode = {
   name: 'TreeNode',
   props: { node: Object, depth: { type: Number, default: 0 } },
   setup(p) {
-    const open = ref(false)
+    const isRoot = p.depth === 0
+    // 根节点默认展开，子节点默认收起
+    const open = ref(isRoot)
     const ch = computed(() => p.node.children || [])
     const hasKids = computed(() => ch.value.length > 0)
+    const meta = p.node.meta_kind || ''
     const rowStyle = computed(() => ({
       paddingLeft: `${10 + p.depth * 20}px`,
     }))
 
     return () => {
+      // ---- 容器节点 ----
       if (hasKids.value) {
+        const rowCls = ['tn-row', 'tn-container-row', open.value ? 'is-open' : '', isRoot ? 'is-root' : '']
         return h('div', { class: 'tn' }, [
-          h('div', {
-            class: ['tn-row', 'tn-container-row', open.value ? 'is-open' : '', p.depth === 0 ? 'is-root' : ''],
-            style: rowStyle.value,
-          }, [
+          h('div', { class: rowCls, style: rowStyle.value }, [
             h('button', {
               class: 'tn-toggle',
               type: 'button',
-              onClick: () => {
-                open.value = !open.value
-              },
+              onClick: () => { open.value = !open.value },
             }, open.value ? '▾' : '▸'),
+            meta ? h('span', { class: `tn-badge tn-badge-${meta}` }, meta === 'sd' ? 'SOME/IP-SD' : 'UNRESOLVED') : null,
             h('span', { class: 'tn-label' }, p.node.name),
             h('span', { class: 'tn-type', title: p.node.type || '' }, p.node.type || '—'),
             h('span', { class: 'tn-meta' }, `${p.node.byte_size}B @${p.node.offset}`),
-            p.node.hex ? h('span', { class: 'tn-hex', title: p.node.hex }, `[${p.node.hex}]`) : null,
           ]),
           open.value ? h('div', { class: 'tn-children' },
             ch.value.map((c, i) => h(TreeNode, {
@@ -64,6 +66,7 @@ const TreeNode = {
         ])
       }
 
+      // ---- 叶子节点 ----
       return h('div', { class: 'tn tn-leaf' }, [
         h('div', { class: ['tn-row', 'tn-leaf-row'], style: rowStyle.value }, [
           h('span', { class: 'tn-toggle tn-toggle-placeholder', 'aria-hidden': 'true' }, ''),
@@ -95,9 +98,10 @@ function _formatVal(v) {
   display: inline-flex; align-items: center; min-height: 26px; padding: 0 10px;
   border-radius: 999px; background: #fff; border: 1px solid #dde5ef; color: #51606f;
 }
+.tree-status-sd { color: #e6a23c; border-color: #f5dab1; background: #fef8f0; font-weight: 600; }
+.tree-status-unresolved { color: #f56c6c; border-color: #fbc4c4; background: #fef0f0; font-weight: 600; }
 .tree-scroll { flex: 1; overflow: auto; padding: 10px 8px 18px; background: linear-gradient(180deg, #fff, #fafcff); }
 .tree-empty { color: #909399; text-align: center; padding: 60px 0; font-size: 15px; }
-.tree-fail { color: #f56c6c; }
 .tn { font-family: 'Consolas','Courier New',monospace; font-size: 14px; position: relative; }
 .tn-row {
   display: flex; align-items: center; gap: 8px; padding-top: 3px; padding-bottom: 3px;
@@ -132,4 +136,12 @@ function _formatVal(v) {
   color: #c0c4cc; font-size: 12px; margin-left: 8px; word-break: break-all;
   user-select: text;
 }
+/* ---- 状态徽标 ---- */
+.tn-badge {
+  display: inline-flex; align-items: center; min-height: 20px; padding: 0 7px;
+  border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+.tn-badge-sd { color: #b88230; background: #fef6ed; border: 1px solid #f0d199; }
+.tn-badge-unresolved { color: #c45656; background: #fef0f0; border: 1px solid #f1b6b6; }
 </style>

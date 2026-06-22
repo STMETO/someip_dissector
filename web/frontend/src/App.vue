@@ -86,7 +86,7 @@ function _loadSplitPercent() {
 </script>
 
 <template>
-  <div class="app-shell" data-v="20250622">
+  <div class="app-shell">
     <UploadBar @parsed="onParsed" :loading="loading || uploading"
                v-model:uploading="uploading"
                :sessionId="sessionId" :hasExport="hasExport" />
