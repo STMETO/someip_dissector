@@ -29,7 +29,7 @@ pip install fastapi uvicorn python-multipart aiofiles
 cd web/frontend && npm install && npm run build
 ```
 
-> 如未构建，`web/start.py` 会自动执行 `npm install && npm run build`。
+> 如未构建，`web/start.py` 会自动执行。
 
 ---
 
@@ -39,9 +39,10 @@ cd web/frontend && npm install && npm run build
 someip_dissector/
 │
 ├── pcap_parsers/                       # SOME/IP 报文解析
-│   ├── common.py                       # TypedDict 类型、SOME/IP 校验、SD 常量
+│   ├── common.py                       # TypedDict 类型、校验、SD 常量、message_type_label()
 │   ├── strategies.py                   # 策略模式：UDP 单包 / TCP 流重组
-│   └── parser.py                       # 调度器：遍历帧 → 分发策略 → 输出报文列表
+│   ├── parser.py                       # 调度器：遍历帧 → 分发策略 → 内联 SD 解析
+│   └── message_view.py                 # 原始数据展示树：msg dict → FieldNode（供前端）
 │
 ├── datatypes/                          # 共享数据类型体系
 │   └── types.py                        # DataType 类族（BaseType / BoolType /
@@ -51,31 +52,31 @@ someip_dissector/
 │   ├── arxml_parser.py                 # lxml 提取 SW-BASE-TYPE、STD-CPP 类型、
 │   │                                   #   SERVICE-INTERFACE、SOME/IP 部署
 │   ├── type_factory.py                 # Factory + Builder 策略模式 → DataType 对象池
-│   ├── service_registry.py             # Registry 模式：(srv_id, method_id, dir) → type_path
+│   ├── service_registry.py             # Registry 模式：O(1) 查表 (srv, method, dir) → type_path
 │   └── exporter.py                     # 中间产物 JSON 导出
 │
 ├── deserialization/                    # 二进制 Payload 反序列化
 │   ├── engine.py                       # 反序列化引擎：ID 查表 → 类型匹配 → 递归解析
-│   └── field_node.py                   # 解析结果树节点（leaf / container）
+│   └── field_node.py                   # 解析结果树节点（leaf / container，含 meta_kind 标记）
 │
 ├── utils/                              # 工具模块
 │   └── logger.py                       # 统一日志：控制台 + RotatingFileHandler
 │
-├── web/                                # Web 界面（前后端分离）
-│   ├── start.py                        # 一键启动（自动构建前端 + 启动 uvicorn）
+├── web/                                # Web 界面（FastAPI + Vue 3）
+│   ├── start.py                        # 一键启动（自动构建前端 + uvicorn）
 │   ├── backend/
 │   │   ├── app.py                      # FastAPI 入口 + 静态文件挂载 + lifespan 清理
 │   │   └── handlers/
-│   │       ├── analysis.py             # 全链路解析管道 + 会话管理
+│   │       ├── analysis.py             # 管道编排 + 会话管理 + API 格式化
 │   │       └── upload.py               # 异步文件上传 + 校验
 │   └── frontend/
 │       ├── src/
 │       │   ├── App.vue                 # 单页布局（上传栏 + 进度条 + 分割面板）
 │       │   ├── api/index.js            # Axios API 封装
 │       │   └── components/
-│       │       ├── UploadBar.vue       # 拖拽上传 + 文件选择 + 保留中间 JSON
-│       │       ├── MessageTable.vue    # 消息列表（搜索 / 分页）
-│       │       └── ParseTree.vue       # 递归可折叠解析树
+│       │       ├── UploadBar.vue       # 拖拽上传 + 文件选择
+│       │       ├── MessageTable.vue    # 消息列表（多关键字搜索 / 分页 / 三态状态列）
+│       │       └── ParseTree.vue       # 双视图递归可折叠树（Raw PCAP + Deserialized）
 │       ├── package.json
 │       └── vite.config.js
 │
@@ -87,7 +88,7 @@ someip_dissector/
 ├── Tools/
 │   └── generate_sample_pcap.py         # 纯 Python 生成测试用 pcap
 │
-├── main.py                             # CLI 全链路批处理入口
+├── main.py                             # CLI 批处理入口
 ├── sample.pcap / sample.arxml          # 示例输入文件
 └── README.md
 ```
@@ -97,7 +98,7 @@ someip_dissector/
 ## 阅读顺序
 
 ### pcap_parsers
-`common.py` → `strategies.py` → `parser.py`
+`common.py` → `strategies.py` → `parser.py` → `message_view.py`
 
 ### arxml_parsers
 `datatypes/types.py` → `arxml_parser.py` → `type_factory.py` → `service_registry.py`
@@ -118,7 +119,7 @@ PCAP 原始报文
         → 定位入参 / 出参 / 事件数据类型路径
           → TypeFactory 获取 DataType 对象（字段布局 + 偏移 + 字节序）
             → 二进制 Payload 流式递归反序列化
-              → 结构化输出（JSON / Console / Web Tree）
+              → 每条消息同时输出 raw_view（原始协议数据） + parsed（反序列化树）
 ```
 
 ---
@@ -136,18 +137,21 @@ python main.py
 ### Web 界面
 
 ```bash
-# 一键启动（自动构建前端 + 启动后端）
 python web/start.py
 ```
 
 浏览器打开 **http://localhost:8000**：
 
 1. 拖拽或选择 `pcap` + `arxml` 文件
-2. 勾选"保留中间JSON"可下载解析中间产物
-3. 点击"开始解析"等待进度条完成
-4. 左侧消息列表支持按序号/帧号/长度/ID/类型搜索
-5. 点击行查看右侧递归解析树（▾ 展开 / ▸ 收起）
-6. 关闭端口时自动清理 sessions 目录
+2. 点击"开始解析"
+3. 左侧消息列表支持多关键字搜索（空格分隔），状态列三态：
+   - 🟢 已解析 — ARXML 类型匹配成功
+   - 🟠 SD — SOME/IP-SD 服务发现报文
+   - 🔴 未解析 — 类型未注册
+4. 右侧双视图树：
+   - **📦 Raw PCAP View** — 原始协议数据（Header 字段含偏移/字节数/hex；SD 含 Flags/Entries/Options）
+   - **🔍 Deserialized** — ARXML 类型反序列化结果（仅已解析消息）
+5. 关闭端口时自动清理 sessions 目录
 
 | 地址 | 用途 |
 |------|------|
@@ -171,3 +175,4 @@ pytest test/ -v
 | **注册表** | `arxml_parsers/service_registry.py` | O(1) 查表 (srv_id, method_id, dir) → type_path |
 | **流式反序列化** | `deserialization/` | 返回 `(FieldNode, consumed_bytes)` 元组，自适应变长字段 |
 | **递归组合** | `datatypes/types.py` | StructureType / ArrayType 内部嵌套 DataType，天然支持嵌套结构 |
+| **数据视图分离** | `pcap_parsers/message_view.py` | 展示树构建与解析逻辑解耦；web 层仅做管道编排，不包含数据变换 |
