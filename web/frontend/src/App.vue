@@ -1,8 +1,9 @@
 <script setup>
-import { ref, reactive, onUnmounted } from 'vue'
+import { ref, reactive, onUnmounted, watch } from 'vue'
 import UploadBar from './components/UploadBar.vue'
 import MessageTable from './components/MessageTable.vue'
 import ParseTree from './components/ParseTree.vue'
+import SignalTiming from './components/SignalTiming.vue'
 import { fetchMessages, fetchMessageDetail, deleteSession, exportUrl } from './api'
 
 const SPLIT_STORAGE_KEY = 'someip-ui-split-percent'
@@ -18,6 +19,10 @@ const uploading = ref(false)    // 上传+后台解析中
 const searchText = ref('')
 const progress = ref(0)         // 0-100, 消息加载进度
 const progressText = ref('')
+const currentTab = ref('parse')  // 'parse' | 'signal'
+
+// 切换会话时回到解析页
+watch(sessionId, () => { currentTab.value = 'parse' })
 
 // 分割条位置 (左栏百分比)
 const splitPercent = ref(_loadSplitPercent())
@@ -104,7 +109,16 @@ function _loadSplitPercent() {
       <span class="overview-pill is-ok">已解析 {{ summary.parsed_count || 0 }}</span>
       <span class="overview-pill">导出 {{ hasExport ? '开启' : '关闭' }}</span>
     </section>
-    <div class="workspace" v-if="sessionId">
+    <nav class="tab-bar" v-if="sessionId">
+      <button class="tab-btn" :class="{ active: currentTab === 'parse' }" @click="currentTab = 'parse'">
+        📋 报文解析
+      </button>
+      <button class="tab-btn" :class="{ active: currentTab === 'signal' }" @click="currentTab = 'signal'">
+        📈 信号时序
+      </button>
+    </nav>
+    <!-- 报文解析视图 -->
+    <div class="workspace" v-if="sessionId && currentTab === 'parse'">
       <div class="pane pane-left" :style="{ width: splitPercent + '%' }">
         <MessageTable :messages="messages" :loading="loading"
                       :selectedIndex="selectedMsg?.index"
@@ -117,6 +131,10 @@ function _loadSplitPercent() {
       <div class="pane pane-right" :style="{ width: (100 - splitPercent) + '%' }">
         <ParseTree :message="selectedMsg" :key="selectedMsg?.index" />
       </div>
+    </div>
+    <!-- 信号时序视图 -->
+    <div class="workspace" v-if="sessionId && currentTab === 'signal'">
+      <SignalTiming :sessionId="sessionId" />
     </div>
   </div>
 </template>
@@ -169,6 +187,20 @@ html, body, #app {
   box-shadow: 0 4px 10px rgba(31, 45, 61, 0.05); font-size: 12px; color: #556273;
 }
 .overview-pill.is-ok { color: #2f8f51; border-color: #b9dfc5; background: rgba(237, 250, 242, 0.96); }
+/* ---- Tab 切换栏 ---- */
+.tab-bar {
+  display: flex; gap: 2px; padding: 0 10px; flex-shrink: 0;
+}
+.tab-btn {
+  padding: 7px 20px; border: 1px solid #d8e0ea; background: rgba(255,255,255,0.7);
+  border-radius: 8px 8px 0 0; cursor: pointer; font-size: 13px; color: #606266;
+  transition: all .15s; border-bottom: none;
+}
+.tab-btn.active {
+  background: rgba(255,255,255,0.95); color: #409eff; font-weight: 600;
+  border-color: #d8e0ea; box-shadow: 0 -2px 8px rgba(64,158,255,0.08);
+}
+.tab-btn:hover:not(.active) { color: #303133; background: rgba(255,255,255,0.88); }
 /* 上传阶段不确定进度条动画 */
 .progress-indeterminate {
   height: 100%; width: 30%; background: linear-gradient(90deg, #409eff, #67c23a);

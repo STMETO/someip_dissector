@@ -24,6 +24,7 @@ from web.backend.handlers.analysis import (
     get_session,
     run_upload_and_parse,
 )
+from web.backend.handlers.signal_timing import get_signal_data, get_signal_meta
 
 _FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 _HAS_FRONTEND = _FRONTEND_DIST.exists() and (_FRONTEND_DIST / "index.html").exists()
@@ -77,6 +78,35 @@ async def get_message_detail(session_id: str, index: int) -> JSONResponse:
     if detail is None:
         raise HTTPException(status_code=404, detail="消息索引不存在")
     return JSONResponse(detail)
+
+
+# ---- 信号时序分析 ----
+
+@app.get("/api/signal/meta/{session_id}")
+async def signal_meta(session_id: str) -> JSONResponse:
+    """返回会话中可绘制信号的三级级联数据（服务→事件→字段路径）。"""
+    try:
+        data = get_signal_meta(session_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return JSONResponse(data)
+
+
+@app.get("/api/signal/data/{session_id}")
+async def signal_data(
+    session_id: str,
+    service_id: int,
+    event_id: int,
+    field_path: str,
+) -> JSONResponse:
+    """返回指定字段的时序数据 + 跳变点列表。"""
+    try:
+        result = get_signal_data(session_id, service_id, event_id, field_path)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="会话不存在或已过期")
+    return JSONResponse(result)
 
 
 @app.delete("/api/session/{session_id}")

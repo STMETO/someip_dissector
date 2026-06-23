@@ -1,0 +1,145 @@
+"""
+信号时序分析 API — Web 胶水层。
+
+从会话缓存取数据 → 调 analysis 模块做提取/检测 → 格式化返回。
+"""
+from __future__ import annotations
+from typing import Any
+
+from analysis.signal_utils import (
+    collect_leaf_paths,
+    detect_transitions,
+    get_field_value,
+)
+from web.backend.handlers.analysis import get_session
+
+_SD_SERVICE_ID = 0xFFFF
+_NOTIFICATION_TYPE = 0x02
+_EVENT_ID_MASK = 0x7FFF
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 公开 API
+# ═══════════════════════════════════════════════════════════════════
+
+def get_signal_meta(session_id: str) -> list[dict[str, Any]]:
+    """返回会话中可绘制信号的三级级联数据（服务→事件→字段路径）。"""
+    state = get_session(session_id)
+    if state is None:
+        return []
+
+    svc_map: dict[int, dict[str, Any]] = {}
+
+    for msg in state.messages:
+        header = msg.get("header", {})
+        srv_id = header.get("service_id", {}).get("dec", 0)
+        msg_type = header.get("message_type", {}).get("dec", 0)
+        method_id = header.get("method_id", {}).get("dec", 0)
+
+        if srv_id == _SD_SERVICE_ID:
+            continue
+        if msg_type != _NOTIFICATION_TYPE:
+            continue
+        if msg.get("parse_status") != "ok":
+            continue
+        parsed = msg.get("parsed")
+        if not parsed:
+            continue
+
+        if srv_id not in svc_map:
+            svc_map[srv_id] = {
+                "service_id": srv_id,
+                "service_id_hex": header["service_id"]["hex"],
+                "events": {},
+            }
+
+        event_map = svc_map[srv_id]["events"]
+        if method_id not in event_map:
+            fields = collect_leaf_paths(parsed)
+            if fields:
+                event_map[method_id] = {
+                    "event_id": method_id,
+                    "event_id_hex": header["method_id"]["hex"],
+                    "fields": fields,
+                }
+
+    result: list[dict[str, Any]] = []
+    for srv_id in sorted(svc_map.keys()):
+        entry = svc_map[srv_id]
+        ev_list = sorted(entry["events"].values(), key=lambda e: e["event_id"])
+        entry["events"] = ev_list
+        result.append(entry)
+
+    return result
+
+
+def get_signal_data(
+    session_id: str,
+    service_id: int,
+    event_id: int,
+    field_path: str,
+) -> dict[str, Any] | None:
+    """从会话缓存中提取指定字段的时序数据 + 跳变点。"""
+    state = get_session(session_id)
+    if state is None:
+        return None
+
+    path_parts = [p for p in field_path.split(".") if p]
+    if not path_parts:
+        return None
+
+    # 筛选
+    candidates: list[dict[str, Any]] = []
+    for msg in state.messages:
+        header = msg.get("header", {})
+        srv_id = header.get("service_id", {}).get("dec", 0)
+        msg_type = header.get("message_type", {}).get("dec", 0)
+        mid = header.get("method_id", {}).get("dec", 0)
+
+        if srv_id != service_id:
+            continue
+        if msg_type != _NOTIFICATION_TYPE:
+            continue
+        if msg.get("parse_status") != "ok":
+            continue
+        if not msg.get("parsed"):
+            continue
+        if mid != event_id and (mid & _EVENT_ID_MASK) != event_id:
+            continue
+
+        candidates.append(msg)
+
+    if not candidates:
+        return _empty_result(service_id, event_id, field_path)
+
+    candidates.sort(key=lambda m: m.get("frame_index", 0))
+
+    # 提取
+    points: list[dict[str, Any]] = []
+    for seq, msg in enumerate(candidates, 1):
+        parsed = msg.get("parsed")
+        if not parsed:
+            continue
+        value = get_field_value(parsed, path_parts)
+        if value is None:
+            continue
+        points.append({
+            "seq": seq,
+            "frame_index": msg.get("frame_index", 0),
+            "value": value,
+        })
+
+    return {
+        "service_id": service_id,
+        "event_id": event_id,
+        "field_path": field_path,
+        "points": points,
+        "transitions": detect_transitions(points),
+    }
+
+
+def _empty_result(sid: int, eid: int, fp: str) -> dict[str, Any]:
+    return {
+        "service_id": sid, "event_id": eid,
+        "field_path": fp, "points": [], "transitions": [],
+    }

@@ -25,6 +25,18 @@ export async function deleteSession(sessionId) {
   return api.delete(`/session/${sessionId}`)
 }
 
+export async function fetchSignalMeta(sessionId) {
+  const { data } = await api.get(`/signal/meta/${sessionId}`)
+  return data
+}
+
+export async function fetchSignalData(sessionId, serviceId, eventId, fieldPath) {
+  const { data } = await api.get(`/signal/data/${sessionId}`, {
+    params: { service_id: serviceId, event_id: eventId, field_path: fieldPath },
+  })
+  return data
+}
+
 export function exportUrl(sessionId, filename) {
   return `/api/export/${sessionId}/${filename}`
 }
