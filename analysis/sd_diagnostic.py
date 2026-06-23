@@ -1,9 +1,9 @@
 """
 SD 订阅诊断 — 纯后端逻辑。
 
-分析会话中的 SD 报文（OfferService / SubscribeEventGroup），
-结合 ARXML 事件注册表，生成订阅诊断报告。
-不依赖 web / session，可直接被 handler 或 CLI 调用。
+诊断规则（pcap 视角）：
+- 服务端：发出 Offer → 是否收到 Subscribe？→ 是否发出 Notification？
+- 客户端：发出 Subscribe → 是否收到 Notification？
 """
 from __future__ import annotations
 from collections import defaultdict
@@ -18,29 +18,16 @@ _NOTIFICATION_TYPE = 0x02
 # ═══════════════════════════════════════════════════════════════════
 
 def extract_sd_records(messages: list[dict[str, Any]]) -> dict[str, Any]:
-    """从 messages 中提取所有 SD 记录。
-
-    Returns
-    -------
-    {
-        "offers":       [(srv_id, inst_id, ecu_ip, endpoint), ...],
-        "subscribes":   [(srv_id, inst_id, eg_id, ecu_ip), ...],
-        "subscribe_ack":[(srv_id, inst_id, eg_id, ecu_ip), ...],
-        "endpoints":    {(srv_id, inst_id): [{"ip", "port", "proto"}, ...]}
-    }
-    """
+    """从 messages 中提取所有 SD 记录。"""
     offers: list[dict[str, Any]] = []
     subscribes: list[dict[str, Any]] = []
     subscribe_acks: list[dict[str, Any]] = []
-    endpoints: dict[tuple[int, int], list[dict[str, Any]]] = defaultdict(list)
 
     for msg in messages:
         sd = msg.get("sd")
         if not isinstance(sd, dict):
             continue
-
         src_ip = msg.get("src_ip", "?")
-        opts = sd.get("options", [])
 
         for entry in sd.get("entries", []):
             etype = entry.get("type", "")
@@ -51,36 +38,18 @@ def extract_sd_records(messages: list[dict[str, Any]]) -> dict[str, Any]:
                 "instance_id": inst_id,
                 "ecu": src_ip,
                 "ttl": _dec(entry.get("ttl")),
-                "major_version": _dec(entry.get("major_version")),
             }
 
             if etype == "OfferService":
                 offers.append(record)
-                # 收集该 offer 对应的 endpoint
-                key = (srv_id, inst_id)
-                for opt in opts:
-                    ep = {
-                        "ip": opt.get("address", src_ip),
-                        "port": opt.get("port", 0),
-                        "proto": opt.get("l4_proto", "?"),
-                    }
-                    if ep not in endpoints[key]:
-                        endpoints[key].append(ep)
-
             elif etype == "SubscribeEventGroup":
                 record["eventgroup_id"] = _dec(entry.get("eventgroup_id"))
                 subscribes.append(record)
-
             elif etype in ("SubscribeEventGroupAck", "SubscribeEventgroupAck"):
                 record["eventgroup_id"] = _dec(entry.get("eventgroup_id"))
                 subscribe_acks.append(record)
 
-    return {
-        "offers": offers,
-        "subscribes": subscribes,
-        "subscribe_acks": subscribe_acks,
-        "endpoints": {f"{k[0]}_{k[1]}": v for k, v in endpoints.items()},
-    }
+    return {"offers": offers, "subscribes": subscribes, "subscribe_acks": subscribe_acks}
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -89,147 +58,149 @@ def extract_sd_records(messages: list[dict[str, Any]]) -> dict[str, Any]:
 
 def build_subscription_report(
     messages: list[dict[str, Any]],
-    registry: Any,  # ServiceRegistry
+    registry: Any,
 ) -> dict[str, Any]:
     """生成订阅诊断报告。
 
-    检查项：
-    - 服务是否被 Offer
-    - Eventgroup 是否被 Subscribe
-    - 实际收到多少 Notification
-    - 是否存在多 ECU Offer 冲突
+    以 Service → EventGroup 为主线，每条记录标注：
+    - 服务端 ECU（Offer 方）
+    - 客户端 ECU（Subscribe 方）
+    - Offer → Subscribe → Notification 链路状态
     """
     records = extract_sd_records(messages)
 
-    # ---- 建立索引 ----
-    # offers_by_srv[srv_id] = [offer_record, ...]
+    # 索引
     offers_by_srv: dict[int, list[dict]] = defaultdict(list)
     for o in records["offers"]:
         offers_by_srv[o["service_id"]].append(o)
 
-    # subs_by_srv_eg[(srv_id, eg_id)] = [sub_record, ...]
     subs_by_srv_eg: dict[tuple[int, int], list[dict]] = defaultdict(list)
     for s in records["subscribes"]:
         subs_by_srv_eg[(s["service_id"], s["eventgroup_id"])].append(s)
 
-    # acks_by_srv_eg[(srv_id, eg_id)] = [ack_record, ...]
     acks_by_srv_eg: dict[tuple[int, int], list[dict]] = defaultdict(list)
     for a in records["subscribe_acks"]:
         acks_by_srv_eg[(a["service_id"], a["eventgroup_id"])].append(a)
 
-    # ---- 统计 Notification 数量 ----
-    # notif_count[(srv_id, method_id)] → count
+    # Notification 计数
     notif_count: dict[tuple[int, int], int] = defaultdict(int)
     for msg in messages:
-        header = msg.get("header", {})
-        srv_id = header.get("service_id", {}).get("dec", 0)
-        msg_type = header.get("message_type", {}).get("dec", 0)
-        if srv_id == _SD_SERVICE_ID or msg_type != _NOTIFICATION_TYPE:
+        h = msg.get("header", {})
+        sid = h.get("service_id", {}).get("dec", 0)
+        mt = h.get("message_type", {}).get("dec", 0)
+        if sid == _SD_SERVICE_ID or mt != _NOTIFICATION_TYPE:
             continue
-        mid = header.get("method_id", {}).get("dec", 0)
-        notif_count[(srv_id, mid)] += 1
+        mid = h.get("method_id", {}).get("dec", 0)
+        notif_count[(sid, mid)] += 1
 
-    # ---- 构建报告 ----
-    all_srv_ids: set[int] = set()
-    all_srv_ids.update(offers_by_srv.keys())
-    all_srv_ids.update(k[0] for k in subs_by_srv_eg.keys())
-
+    # 构建报告
+    all_srv_ids: set[int] = set(offers_by_srv.keys()) | {k[0] for k in subs_by_srv_eg.keys()}
     services: list[dict[str, Any]] = []
     summary = {
-        "total_services": 0,
-        "offered_services": 0,
-        "total_eventgroups": 0,
-        "conflict_count": 0,
-        "silent_count": 0,       # 有订阅但无通知
-        "no_offer_count": 0,     # 有订阅但无 offer
+        "total_services": 0, "offered_services": 0,
+        "total_eventgroups": 0, "conflict_count": 0,
+        "silent_count": 0, "unsubscribed_count": 0, "no_offer_count": 0,
     }
 
     for srv_id in sorted(all_srv_ids):
         offers = offers_by_srv.get(srv_id, [])
-        srv_entry: dict[str, Any] = {
+        server_ecus = sorted(set(o["ecu"] for o in offers))
+        has_offer = len(offers) > 0
+        conflict = len(server_ecus) > 1
+
+        svc: dict[str, Any] = {
             "service_id": srv_id,
             "service_id_hex": f"0x{srv_id:04X}",
             "service_name": _svc_name(registry, srv_id),
-            "offers": offers,
-            "has_offer": len(offers) > 0,
-            "offer_conflict": len(set(o["ecu"] for o in offers)) > 1,
+            "has_offer": has_offer,
+            "server_ecus": server_ecus,
+            "offer_conflict": conflict,
             "eventgroups": [],
             "issues": [],
         }
 
-        if srv_entry["offer_conflict"]:
-            srv_entry["issues"].append(f"多 ECU Offer 冲突: {', '.join(sorted(set(o['ecu'] for o in offers)))}")
+        if conflict:
+            svc["issues"].append(
+                f"Offer 冲突 — 多个 ECU 发布了同一服务: {', '.join(server_ecus)}")
             summary["conflict_count"] += 1
 
-        # 收集该服务下所有被订阅的 eventgroup
-        eg_ids: set[int] = set()
-        for (sid, eg_id) in subs_by_srv_eg:
-            if sid == srv_id:
-                eg_ids.add(eg_id)
+        # 收集 eventgroup
+        eg_ids: set[int] = {eg for (sid, eg) in subs_by_srv_eg if sid == srv_id}
 
-        if not eg_ids:
-            # 无订阅：只记录 offer 情况
-            if srv_entry["has_offer"]:
-                summary["offered_services"] += 1
-                summary["total_services"] += 1
-            services.append(srv_entry)
+        if not has_offer and not eg_ids:
             continue
 
         summary["total_services"] += 1
-        if srv_entry["has_offer"]:
+        if has_offer:
             summary["offered_services"] += 1
-        else:
-            srv_entry["issues"].append("无 Offer — 客户端订阅了但服务端未发布")
+
+        if not eg_ids:
+            # 有 Offer 但无任何 Subscribe
+            if has_offer:
+                svc["issues"].append(
+                    f"服务端 {', '.join(server_ecus)} 发布了 Offer，但无客户端 Subscribe")
+                summary["unsubscribed_count"] += 1
+            services.append(svc)
+            continue
+
+        if not has_offer:
+            svc["issues"].append("服务未被 Offer，但存在客户端 Subscribe")
             summary["no_offer_count"] += 1
 
         for eg_id in sorted(eg_ids):
             subs = subs_by_srv_eg.get((srv_id, eg_id), [])
             acks = acks_by_srv_eg.get((srv_id, eg_id), [])
-            subscriber_ecus = sorted(set(s["ecu"] for s in subs))
+            client_ecus = sorted(set(s["ecu"] for s in subs))
             ack_ecus = sorted(set(a["ecu"] for a in acks))
 
-            # 统计该 eventgroup 对应的 notification 数量
-            # eventgroup_id 对应部署中的 event_id
-            total_notif = notif_count.get((srv_id, eg_id), 0)
-            # 也尝试带 0x8000 掩码查找
-            if total_notif == 0:
-                total_notif = notif_count.get((srv_id, eg_id | 0x8000), 0)
+            # Notification 计数（带/不带 0x8000 掩码）
+            n_total = notif_count.get((srv_id, eg_id), 0) \
+                      + notif_count.get((srv_id, eg_id | 0x8000), 0)
 
-            eg_entry: dict[str, Any] = {
+            eg: dict[str, Any] = {
                 "eventgroup_id": eg_id,
+                "event_name": _evt_name(registry, srv_id, eg_id),
+                "eventgroup_name": _eg_name(registry, srv_id, eg_id),
+                "server_ecus": server_ecus,
+                "client_ecus": client_ecus,
+                "ack_ecus": ack_ecus,
                 "subscribed": len(subs) > 0,
                 "acked": len(acks) > 0,
-                "subscriber_ecus": subscriber_ecus,
-                "ack_ecus": ack_ecus,
-                "notification_count": total_notif,
+                "notification_count": n_total,
                 "issues": [],
             }
 
-            if not eg_entry["subscribed"]:
-                eg_entry["issues"].append("未订阅")
-            elif not eg_entry["acked"]:
-                eg_entry["issues"].append("Subscribe 未被 Ack")
-            elif total_notif == 0:
-                eg_entry["issues"].append("已订阅但未收到 Notification 报文")
+            # ---- 链路诊断 ----
+            if has_offer and eg["subscribed"] and not eg["acked"]:
+                eg["issues"].append(
+                    f"客户端 {', '.join(client_ecus)} Subscribe 了，"
+                    f"但服务端 {', '.join(server_ecus)} 未 Ack")
+            elif has_offer and eg["subscribed"] and n_total == 0:
+                eg["issues"].append(
+                    f"服务端 {', '.join(server_ecus)} Offer ✓，"
+                    f"客户端 {', '.join(client_ecus)} Subscribe ✓ → "
+                    f"但未收到 Notification")
                 summary["silent_count"] += 1
+            elif has_offer and not eg["subscribed"]:
+                eg["issues"].append(
+                    f"服务端 {', '.join(server_ecus)} Offer ✓，"
+                    f"但无客户端 Subscribe")
+                summary["unsubscribed_count"] += 1
+            elif not has_offer and eg["subscribed"]:
+                eg["issues"].append(
+                    f"客户端 {', '.join(client_ecus)} Subscribe 了，"
+                    f"但无服务端 Offer")
+                summary["no_offer_count"] += 1
 
-            # 从 registry 查找名称
-            eg_entry["event_name"] = _evt_name(registry, srv_id, eg_id)
-            eg_entry["eventgroup_name"] = _eg_name(registry, srv_id, eg_id)
-
-            srv_entry["eventgroups"].append(eg_entry)
+            svc["eventgroups"].append(eg)
             summary["total_eventgroups"] += 1
 
-        services.append(srv_entry)
+        services.append(svc)
 
-    return {
-        "services": services,
-        "summary": summary,
-    }
+    return {"services": services, "summary": summary}
 
 
 def _dec(val: Any) -> int:
-    """从 {dec, hex} 字典或直接 int 取值。"""
     if isinstance(val, dict):
         return val.get("dec", 0)
     if isinstance(val, int):
@@ -246,24 +217,18 @@ def _svc_name(registry: Any, srv_id: int) -> str:
 
 
 def _evt_name(registry: Any, srv_id: int, evt_id: int) -> str:
-    """返回事件名称（Event 本身的名称，如 NtfParkingFuncModReq）。"""
     try:
         if registry:
             n = registry.lookup_event_name(srv_id, evt_id)
-            if n:
-                return n
+            return n or ""
     except Exception:
-        pass
-    return ""
+        return ""
 
 
 def _eg_name(registry: Any, srv_id: int, eg_id: int) -> str:
-    """返回 EventGroup 名称（如 ADCC_RtMM_Eventgroup）。"""
     try:
         if registry:
             n = registry.lookup_eventgroup_name(srv_id, eg_id)
-            if n:
-                return n
+            return n or ""
     except Exception:
-        pass
-    return ""
+        return ""

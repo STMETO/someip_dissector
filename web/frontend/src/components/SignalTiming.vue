@@ -86,13 +86,13 @@ function onMsgSelect(msg) {
 
 <style scoped>
 .signal-timing {
-  display: flex; flex-direction: column; height: 100%;
+  flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0;
 }
 .signal-workspace {
-  flex: 1; display: flex; overflow: hidden; min-height: 0;
+  flex: 1; display: flex; overflow: hidden; min-height: 0; min-width: 0;
 }
 .signal-chart-area {
-  flex: 1; display: flex; min-height: 0;
+  flex: 1; display: flex; min-height: 0; min-width: 0;
   background: rgba(255,255,255,0.92); border: 1px solid #d8e0ea;
   border-radius: 10px;
   box-shadow: 0 8px 24px rgba(31,45,61,0.08);

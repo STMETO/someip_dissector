@@ -107,7 +107,7 @@ const rows = computed(() => {
         eventgroup_name: eg.eventgroup_name || '',
         has_offer: srv.has_offer,
         subscribed: eg.subscribed,
-        subscriber_ecus: eg.subscriber_ecus,
+        subscriber_ecus: eg.client_ecus,
         acked: eg.acked,
         notification_count: eg.notification_count,
         issue: eg.issues.join('; ') || '',

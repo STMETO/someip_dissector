@@ -86,11 +86,12 @@ def get_signal_data(
     if state is None:
         return None
 
-    path_parts = [p for p in field_path.split(".") if p]
-    if not path_parts:
+    # 支持多字段（逗号分隔）
+    field_paths = [fp.strip() for fp in field_path.split(",") if fp.strip()]
+    if not field_paths:
         return None
 
-    # 筛选
+    # 筛选候选报文（与字段无关，先筛出所有匹配的 notification）
     candidates: list[dict[str, Any]] = []
     for msg in state.messages:
         header = msg.get("header", {})
@@ -112,38 +113,44 @@ def get_signal_data(
         candidates.append(msg)
 
     if not candidates:
-        return _empty_result(service_id, event_id, field_path)
+        return _empty_multi(service_id, event_id, field_paths)
 
     candidates.sort(key=lambda m: m.get("frame_index", 0))
 
-    # 提取
-    points: list[dict[str, Any]] = []
-    for seq, msg in enumerate(candidates, 1):
-        parsed = msg.get("parsed")
-        if not parsed:
-            continue
-        value = get_field_value(parsed, path_parts)
-        if value is None:
-            continue
-        points.append({
-            "seq": seq,
-            "frame_index": msg.get("frame_index", 0),
-            "value": value,
+    # 对每个字段分别提取
+    fields_data: list[dict[str, Any]] = []
+    for fp in field_paths:
+        path_parts = [p for p in fp.split(".") if p]
+        points: list[dict[str, Any]] = []
+        for seq, msg in enumerate(candidates, 1):
+            parsed = msg.get("parsed")
+            if not parsed:
+                continue
+            value = get_field_value(parsed, path_parts)
+            if value is None:
+                continue
+            points.append({
+                "seq": seq,
+                "frame_index": msg.get("frame_index", 0),
+                "value": value,
+            })
+        fields_data.append({
+            "field_path": fp,
+            "points": points,
+            "transitions": detect_transitions(points),
         })
 
     return {
         "service_id": service_id,
         "event_id": event_id,
-        "field_path": field_path,
-        "points": points,
-        "transitions": detect_transitions(points),
+        "fields": fields_data,
     }
 
 
-def _empty_result(sid: int, eid: int, fp: str) -> dict[str, Any]:
+def _empty_multi(sid: int, eid: int, fps: list[str]) -> dict[str, Any]:
     return {
         "service_id": sid, "event_id": eid,
-        "field_path": fp, "points": [], "transitions": [],
+        "fields": [{"field_path": fp, "points": [], "transitions": []} for fp in fps],
     }
 
 
