@@ -151,13 +151,17 @@ def get_export_path(session_id: str, filename: str) -> Path | None:
 # API 数据格式化
 # ═══════════════════════════════════════════════════════════════════
 
-def build_message_summaries(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_message_summaries(messages: list[dict[str, Any]],
+                            registry: Any = None) -> list[dict[str, Any]]:
+    """生成消息列表摘要，附带 Service/Method 可读名称。"""
     return [
         {
             "index": m["index"],
             "frame_index": m["frame_index"],
             "service_id": m["header"]["service_id"]["hex"],
+            "service_name": _resolve_svc_name(registry, m),
             "method_id": m["header"]["method_id"]["hex"],
+            "method_name": _resolve_method_name(registry, m),
             "message_type": m["header"]["message_type"]["hex"],
             "message_kind": m.get("message_kind", "?"),
             "transport": m["transport"],
@@ -166,6 +170,40 @@ def build_message_summaries(messages: list[dict[str, Any]]) -> list[dict[str, An
         }
         for m in messages
     ]
+
+
+def _resolve_svc_name(registry: Any, msg: dict) -> str:
+    try:
+        if registry:
+            sid = msg["header"]["service_id"]["dec"]
+            return registry.lookup_service_name(sid) or ""
+    except Exception:
+        pass
+    return ""
+
+
+def _resolve_method_name(registry: Any, msg: dict) -> str:
+    try:
+        if registry:
+            sid = msg["header"]["service_id"]["dec"]
+            mid = msg["header"]["method_id"]["dec"]
+            # notification 的 event_id 带 0x8000 高位，先去掉再查
+            n = registry.lookup_event_name(sid, mid & 0x7FFF)
+            if n:
+                return n
+            n = registry.lookup_method_name(sid, mid & 0x7FFF)
+            if n:
+                return n
+            # 兜底：原值查
+            n = registry.lookup_event_name(sid, mid)
+            if n:
+                return n
+            n = registry.lookup_method_name(sid, mid)
+            if n:
+                return n
+    except Exception:
+        pass
+    return ""
 
 
 def build_message_detail(messages: list[dict[str, Any]], index: int) -> dict | None:

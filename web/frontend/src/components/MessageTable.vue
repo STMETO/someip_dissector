@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, reactive, onUnmounted } from 'vue'
 
 const props = defineProps({
   messages: Array, loading: Boolean, selectedIndex: Number, searchText: String,
@@ -8,6 +8,34 @@ const emit = defineEmits(['select', 'update:searchText'])
 
 const currentPage = ref(1)
 const pageSize = 100
+
+// ---- 列宽拖动 ----
+const colWidths = reactive({
+  index: 45, frame_index: 45, service_id: 140, method_id: 140,
+  msg_type: 70, transport: 52, payload_length: 45, status: 55,
+})
+let resizeCol = null, resizeStartX = 0, resizeStartW = 0
+
+function onResizeStart(col, e) {
+  resizeCol = col; resizeStartX = e.clientX; resizeStartW = colWidths[col]
+  document.addEventListener('mousemove', onResizeMove)
+  document.addEventListener('mouseup', onResizeEnd)
+  e.preventDefault()
+}
+function onResizeMove(e) {
+  if (!resizeCol) return
+  const delta = e.clientX - resizeStartX
+  colWidths[resizeCol] = Math.max(30, resizeStartW + delta)
+}
+function onResizeEnd() {
+  resizeCol = null
+  document.removeEventListener('mousemove', onResizeMove)
+  document.removeEventListener('mouseup', onResizeEnd)
+}
+onUnmounted(() => {
+  document.removeEventListener('mousemove', onResizeMove)
+  document.removeEventListener('mouseup', onResizeEnd)
+})
 
 const filtered = computed(() => {
   if (!props.searchText) return props.messages || []
@@ -23,7 +51,9 @@ const filtered = computed(() => {
       String(m.frame_index),
       String(m.payload_length),
       String(m.service_id),
+      String(m.service_name),
       String(m.method_id),
+      String(m.method_name),
       String(m.message_kind),
       String(m.parse_status),
       String(m.transport || ''),
@@ -48,6 +78,11 @@ function goPage(v) {
 
 function clearSearch() {
   emit('update:searchText', '')
+}
+
+function fmtId(hex, name) {
+  if (name) return `${hex} (${name})`
+  return hex
 }
 
 function statusLabel(s) {
@@ -84,14 +119,14 @@ function statusClass(s) {
       <table class="msg-table">
         <thead>
           <tr>
-            <th style="width:45px">序号</th>
-            <th style="width:45px">帧号</th>
-            <th style="width:80px">Service ID</th>
-            <th style="width:100px">Method/Event</th>
-            <th style="width:70px">msg_type</th>
-            <th style="width:52px">协议</th>
-            <th style="width:45px">长度</th>
-            <th style="width:55px">状态</th>
+            <th :style="{ width: colWidths.index + 'px' }">序号<span class="col-resize" @mousedown="onResizeStart('index', $event)"></span></th>
+            <th :style="{ width: colWidths.frame_index + 'px' }">帧号<span class="col-resize" @mousedown="onResizeStart('frame_index', $event)"></span></th>
+            <th :style="{ width: colWidths.service_id + 'px' }">Service ID<span class="col-resize" @mousedown="onResizeStart('service_id', $event)"></span></th>
+            <th :style="{ width: colWidths.method_id + 'px' }">Method/Event<span class="col-resize" @mousedown="onResizeStart('method_id', $event)"></span></th>
+            <th :style="{ width: colWidths.msg_type + 'px' }">msg_type<span class="col-resize" @mousedown="onResizeStart('msg_type', $event)"></span></th>
+            <th :style="{ width: colWidths.transport + 'px' }">协议<span class="col-resize" @mousedown="onResizeStart('transport', $event)"></span></th>
+            <th :style="{ width: colWidths.payload_length + 'px' }">长度<span class="col-resize" @mousedown="onResizeStart('payload_length', $event)"></span></th>
+            <th :style="{ width: colWidths.status + 'px' }">状态<span class="col-resize" @mousedown="onResizeStart('status', $event)"></span></th>
           </tr>
         </thead>
         <tbody>
@@ -103,8 +138,8 @@ function statusClass(s) {
               @click="emit('select', m)">
             <td class="mono">{{ m.index }}</td>
             <td class="mono">{{ m.frame_index }}</td>
-            <td class="mono">{{ m.service_id }}</td>
-            <td class="mono">{{ m.method_id }}</td>
+            <td class="mono">{{ fmtId(m.service_id, m.service_name) }}</td>
+            <td class="mono">{{ fmtId(m.method_id, m.method_name) }}</td>
             <td class="mono">{{ m.message_kind }}</td>
             <td class="mono">{{ m.transport || '-' }}</td>
             <td class="mono" style="text-align:right">{{ m.payload_length }}</td>
@@ -148,6 +183,12 @@ function statusClass(s) {
 .search-input:focus { border-color: #409eff; box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.12); }
 .msg-table-wrap { flex: 1; overflow: auto; }
 .msg-table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+.col-resize {
+  position: absolute; right: 0; top: 0; bottom: 0; width: 6px; cursor: col-resize;
+  background: transparent; transition: background .15s;
+}
+.col-resize:hover { background: #409eff; }
+.msg-table th { position: relative; }
 .msg-table th {
   position: sticky; top: 0; background: #f7fafd; padding: 7px 8px;
   text-align: left; border-bottom: 1px solid #e5ebf2; font-weight: 700; z-index: 1;

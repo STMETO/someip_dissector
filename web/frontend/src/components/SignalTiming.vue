@@ -39,7 +39,6 @@ async function onGenerate(params) {
   loading.value = true
   selectInfo.value = params
   chartData.value = null
-  detailMsg.value = null
   try {
     chartData.value = await fetchSignalData(
       props.sessionId, params.service_id, params.event_id, params.field_path

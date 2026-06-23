@@ -67,7 +67,8 @@ async def get_messages(session_id: str) -> JSONResponse:
     state = get_session(session_id)
     if state is None:
         raise HTTPException(status_code=404, detail="会话不存在或已过期")
-    return JSONResponse(build_message_summaries(state.messages))
+    reg = getattr(state, "registry", None)
+    return JSONResponse(build_message_summaries(state.messages, reg))
 
 
 @app.get("/api/message/{session_id}/{index}")

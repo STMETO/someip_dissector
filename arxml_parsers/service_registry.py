@@ -31,6 +31,11 @@ class ServiceRegistry:
     _event_map: dict[tuple[int, int], str] = field(default_factory=dict)
     # 接口缓存：AR完整路径 → 原始服务接口对象，用于通过部署ref反向查找接口定义
     _interface_index: dict[str, RawServiceInterface] = field(default_factory=dict)
+    # 名称映射（供前端展示）
+    _svc_name_map: dict[int, str] = field(default_factory=dict)
+    _evt_name_map: dict[tuple[int, int], str] = field(default_factory=dict)
+    _method_name_map: dict[tuple[int, int], str] = field(default_factory=dict)
+    _eg_name_map: dict[tuple[int, int], str] = field(default_factory=dict)
 
     def build(
         self,
@@ -64,34 +69,37 @@ class ServiceRegistry:
                 skipped_no_iface += 1
                 logger.debug("Deployment interface not found: %s", dep.interface_ref)
                 continue
-                continue
+
+            # ---- 记录 Service 名称 ----
+            svc_name = _last_segment(dep.interface_ref)
+            self._svc_name_map[dep.service_id] = svc_name
+
+            # ---- 记录 EventGroup 名称 ----
+            for eg in dep.event_groups:
+                self._eg_name_map[(dep.service_id, eg.event_group_id)] = eg.name
 
             # ========== 处理RPC方法，填充_method_map ==========
             for md in dep.methods:
-                # md.method_ref 是完整路径，截取最后一段短名匹配接口内方法
                 method_short_name = _last_segment(md.method_ref)
-                # 从接口字典按方法名取出方法定义
                 method = iface.methods.get(method_short_name)
                 if method is None:
                     continue
-                # 遍历该方法所有参数（IN/OUT/INOUT）
+                # 记录方法名称
+                self._method_name_map[(dep.service_id, md.method_id)] = method_short_name
                 for arg in method.arguments:
-                    # 将参数方向IN/OUT/INOUT 转换为SOME/IP报文类型 request/response
                     msg_type = _direction_to_msg_type(arg.direction)
-                    # 拼接唯一索引key：服务ID + 方法ID + 报文方向
                     map_key = (dep.service_id, md.method_id, msg_type)
-                    # 存入映射：网络ID组合 → 参数数据类型路径
                     self._method_map[map_key] = arg.type_ref
 
             # ========== 处理广播事件，填充_event_map ==========
             for ed in dep.events:
-                # 截取事件短名，匹配接口内事件
                 event_short_name = _last_segment(ed.event_ref)
                 evt = iface.events.get(event_short_name)
-                # 事件存在且绑定了数据类型才存入映射
                 if evt is not None and evt.type_ref:
                     event_key = (dep.service_id, ed.event_id)
                     self._event_map[event_key] = evt.type_ref
+                # 记录事件名称
+                self._evt_name_map[(dep.service_id, ed.event_id)] = event_short_name
 
         if skipped_zero:
             logger.debug("Skipped %d deployments with service_id=0", skipped_zero)
@@ -116,6 +124,22 @@ class ServiceRegistry:
         根据服务ID+事件ID查询广播事件的数据类型路径
         """
         return self._event_map.get((service_id, event_id))
+
+    def lookup_service_name(self, service_id: int) -> str | None:
+        """根据 Service ID 查询服务名称。"""
+        return self._svc_name_map.get(service_id)
+
+    def lookup_event_name(self, service_id: int, event_id: int) -> str | None:
+        """根据 Service ID + Event ID 查询事件名称。"""
+        return self._evt_name_map.get((service_id, event_id))
+
+    def lookup_method_name(self, service_id: int, method_id: int) -> str | None:
+        """根据 Service ID + Method ID 查询方法名称。"""
+        return self._method_name_map.get((service_id, method_id))
+
+    def lookup_eventgroup_name(self, service_id: int, eg_id: int) -> str | None:
+        """根据 Service ID + EventGroup ID 查询 EventGroup 名称。"""
+        return self._eg_name_map.get((service_id, eg_id))
 
     @property
     def method_count(self) -> int:

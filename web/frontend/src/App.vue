@@ -128,7 +128,7 @@ function _loadSplitPercent() {
       </button>
     </nav>
     <!-- 报文解析视图 -->
-    <div class="workspace" v-if="sessionId && currentTab === 'parse'">
+    <div class="workspace" v-show="sessionId && currentTab === 'parse'">
       <div class="pane pane-left" :style="{ width: splitPercent + '%' }">
         <MessageTable :messages="messages" :loading="loading"
                       :selectedIndex="selectedMsg?.index"
@@ -143,11 +143,11 @@ function _loadSplitPercent() {
       </div>
     </div>
     <!-- 信号时序视图 -->
-    <div class="workspace" v-if="sessionId && currentTab === 'signal'">
+    <div class="workspace" v-show="sessionId && currentTab === 'signal'">
       <SignalTiming :sessionId="sessionId" :prefill="signalPrefill" />
     </div>
     <!-- 订阅诊断视图 -->
-    <div class="workspace" v-if="sessionId && currentTab === 'subscription'">
+    <div class="workspace" v-show="sessionId && currentTab === 'subscription'">
       <SubscriptionReport :sessionId="sessionId" @jump-signal="onJumpToSignal" />
     </div>
   </div>

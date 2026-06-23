@@ -149,6 +149,7 @@ def build_subscription_report(
         srv_entry: dict[str, Any] = {
             "service_id": srv_id,
             "service_id_hex": f"0x{srv_id:04X}",
+            "service_name": _svc_name(registry, srv_id),
             "offers": offers,
             "has_offer": len(offers) > 0,
             "offer_conflict": len(set(o["ecu"] for o in offers)) > 1,
@@ -212,15 +213,9 @@ def build_subscription_report(
                 eg_entry["issues"].append("已订阅但未收到 Notification 报文")
                 summary["silent_count"] += 1
 
-            # 尝试从 registry 查找事件名
-            try:
-                type_path = registry.lookup_event(srv_id, eg_id)
-                if type_path is None:
-                    type_path = registry.lookup_event(srv_id, eg_id | 0x8000)
-                if type_path:
-                    eg_entry["event_name"] = type_path.rsplit("/", 1)[-1]
-            except Exception:
-                pass
+            # 从 registry 查找名称
+            eg_entry["event_name"] = _evt_name(registry, srv_id, eg_id)
+            eg_entry["eventgroup_name"] = _eg_name(registry, srv_id, eg_id)
 
             srv_entry["eventgroups"].append(eg_entry)
             summary["total_eventgroups"] += 1
@@ -240,3 +235,35 @@ def _dec(val: Any) -> int:
     if isinstance(val, int):
         return val
     return 0
+
+
+def _svc_name(registry: Any, srv_id: int) -> str:
+    try:
+        n = registry.lookup_service_name(srv_id) if registry else None
+        return n or ""
+    except Exception:
+        return ""
+
+
+def _evt_name(registry: Any, srv_id: int, evt_id: int) -> str:
+    """返回事件名称（Event 本身的名称，如 NtfParkingFuncModReq）。"""
+    try:
+        if registry:
+            n = registry.lookup_event_name(srv_id, evt_id)
+            if n:
+                return n
+    except Exception:
+        pass
+    return ""
+
+
+def _eg_name(registry: Any, srv_id: int, eg_id: int) -> str:
+    """返回 EventGroup 名称（如 ADCC_RtMM_Eventgroup）。"""
+    try:
+        if registry:
+            n = registry.lookup_eventgroup_name(srv_id, eg_id)
+            if n:
+                return n
+    except Exception:
+        pass
+    return ""

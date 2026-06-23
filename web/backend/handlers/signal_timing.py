@@ -50,6 +50,7 @@ def get_signal_meta(session_id: str) -> list[dict[str, Any]]:
             svc_map[srv_id] = {
                 "service_id": srv_id,
                 "service_id_hex": header["service_id"]["hex"],
+                "service_name": _svc_name(srv_id, state),
                 "events": {},
             }
 
@@ -60,6 +61,7 @@ def get_signal_meta(session_id: str) -> list[dict[str, Any]]:
                 event_map[method_id] = {
                     "event_id": method_id,
                     "event_id_hex": header["method_id"]["hex"],
+                    "event_name": _evt_name(state, srv_id, method_id),
                     "fields": fields,
                 }
 
@@ -143,3 +145,31 @@ def _empty_result(sid: int, eid: int, fp: str) -> dict[str, Any]:
         "service_id": sid, "event_id": eid,
         "field_path": fp, "points": [], "transitions": [],
     }
+
+
+def _svc_name(srv_id: int, state: Any) -> str:
+    try:
+        reg = getattr(state, "registry", None)
+        if reg:
+            n = reg.lookup_service_name(srv_id)
+            if n:
+                return n
+    except Exception:
+        pass
+    return ""
+
+
+def _evt_name(state: Any, srv_id: int, event_id: int) -> str:
+    try:
+        reg = getattr(state, "registry", None)
+        if reg:
+            # notification event_id 带 0x8000 高位，先去掉再查
+            n = reg.lookup_event_name(srv_id, event_id & 0x7FFF)
+            if n:
+                return n
+            n = reg.lookup_event_name(srv_id, event_id)
+            if n:
+                return n
+    except Exception:
+        pass
+    return ""

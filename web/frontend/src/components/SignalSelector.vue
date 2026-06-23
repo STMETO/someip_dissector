@@ -63,12 +63,16 @@ watch([() => props.prefill, () => props.meta], ([pf]) => {
 
 const svcOptions = () => services.value.map((s, i) => ({
   value: i,
-  label: `${s.service_id_hex} (${s.service_id}) · ${s.events?.length || 0} events`,
+  label: s.service_name
+    ? `${s.service_id_hex} ${s.service_name} · ${s.events?.length || 0} events`
+    : `${s.service_id_hex} (${s.service_id}) · ${s.events?.length || 0} events`,
 }))
 
 const evtOptions = () => events.value.map((e, i) => ({
   value: i,
-  label: `${e.event_id_hex} (${e.event_id}) · ${e.fields?.length || 0} fields`,
+  label: e.event_name
+    ? `${e.event_id_hex} ${e.event_name} · ${e.fields?.length || 0} fields`
+    : `${e.event_id_hex} (${e.event_id}) · ${e.fields?.length || 0} fields`,
 }))
 
 const fieldOptions = () => fields.value.map(f => ({ value: f, label: f }))

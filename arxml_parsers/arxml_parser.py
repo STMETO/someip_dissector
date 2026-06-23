@@ -120,12 +120,20 @@ class RawEventDeployment:
 
 
 @dataclass
+class RawEventGroupDeployment:
+    """单个 EventGroup 的 SOME/IP 部署。"""
+    event_group_id: int     # EventGroup ID
+    name: str = ""          # SHORT-NAME (e.g. ADCC_RtMM_Eventgroup)
+
+
+@dataclass
 class RawServiceDeployment:
-    # 对应节点：<SOMEIP-SERVICE-INTERFACE-DEPLOYMENT> 整个服务接口的完整 SOME/IP 部署配置：
-    service_id: int         # SOME/IP ServiceID（服务总 ID）
-    interface_ref: str      # 关联对应的 SERVICE-INTERFACE 路径
-    methods: list[RawMethodDeployment] = field(default_factory=list)    # 该服务下所有方法 ID 映射列表
-    events: list[RawEventDeployment] = field(default_factory=list)      # 该服务下所有事件 ID 映射列表
+    """对应节点：<SOMEIP-SERVICE-INTERFACE-DEPLOYMENT>。"""
+    service_id: int
+    interface_ref: str
+    methods: list[RawMethodDeployment] = field(default_factory=list)
+    events: list[RawEventDeployment] = field(default_factory=list)
+    event_groups: list[RawEventGroupDeployment] = field(default_factory=list)
 
 
 # ======================================================================
@@ -335,6 +343,16 @@ class ArxmlParser:
                 eref = self._child_text(ed, "EVENT-REF") or ""
                 dep.events.append(
                     RawEventDeployment(event_id=int(eid_str), event_ref=eref)
+                )
+
+            for eg in elem.findall(
+                ".//ns:SOMEIP-EVENT-GROUP", _NSMAP
+            ):
+                eg_id_str = self._child_text(eg, "EVENT-GROUP-ID") or "0"
+                eg_name = self._child_text(eg, "SHORT-NAME") or ""
+                dep.event_groups.append(
+                    RawEventGroupDeployment(
+                        event_group_id=int(eg_id_str), name=eg_name)
                 )
 
             result.append(dep)

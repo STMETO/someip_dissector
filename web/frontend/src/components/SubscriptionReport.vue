@@ -1,6 +1,31 @@
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, reactive, onUnmounted } from 'vue'
 import { fetchSubscriptionReport } from '../api'
+
+// ---- 列宽拖动 ----
+const colWidths = reactive({
+  svc: 170, eg: 80, evt: 200, offer: 50, sub: 62, notif: 50, issue: 0,
+})
+let resizeCol = null, resizeStartX = 0, resizeStartW = 0
+function onResizeStart(col, e) {
+  resizeCol = col; resizeStartX = e.clientX; resizeStartW = colWidths[col]
+  document.addEventListener('mousemove', onResizeMove)
+  document.addEventListener('mouseup', onResizeEnd)
+  e.preventDefault()
+}
+function onResizeMove(e) {
+  if (!resizeCol) return
+  colWidths[resizeCol] = Math.max(30, resizeStartW + (e.clientX - resizeStartX))
+}
+function onResizeEnd() {
+  resizeCol = null
+  document.removeEventListener('mousemove', onResizeMove)
+  document.removeEventListener('mouseup', onResizeEnd)
+}
+onUnmounted(() => {
+  document.removeEventListener('mousemove', onResizeMove)
+  document.removeEventListener('mouseup', onResizeEnd)
+})
 
 const props = defineProps({
   sessionId: { type: String, required: true },
@@ -23,6 +48,29 @@ async function loadReport() {
   finally { loading.value = false }
 }
 
+function fmtSvc(row) {
+  const h = row.service_id_hex
+  const n = row.service_name
+  return n ? `${h} (${n})` : h
+}
+
+function fmtEg(row) {
+  // EG ID（Group名）
+  if (row.eventgroup_id == null) return '—'
+  const h = '0x' + row.eventgroup_id.toString(16).toUpperCase().padStart(4, '0')
+  const gn = row.eventgroup_name
+  return gn ? `${h}（${gn}）` : h
+}
+
+function fmtEvtGroup(row) {
+  // event_ID（事件名）
+  if (row.eventgroup_id == null) return ''
+  const notifId = row.eventgroup_id | 0x8000
+  const nh = '0x' + notifId.toString(16).toUpperCase().padStart(4, '0')
+  const en = row.event_name
+  return en ? `${nh}（${en}）` : nh
+}
+
 // 展开为表格行
 const rows = computed(() => {
   if (!report.value) return []
@@ -35,6 +83,7 @@ const rows = computed(() => {
           _key: `srv-${srv.service_id}-${issue}`,
           service_id: srv.service_id,
           service_id_hex: srv.service_id_hex,
+          service_name: srv.service_name || '',
           eventgroup_id: null,
           event_name: '—',
           has_offer: srv.has_offer,
@@ -52,8 +101,10 @@ const rows = computed(() => {
         _key: `eg-${srv.service_id}-${eg.eventgroup_id}`,
         service_id: srv.service_id,
         service_id_hex: srv.service_id_hex,
+        service_name: srv.service_name || '',
         eventgroup_id: eg.eventgroup_id,
-        event_name: eg.event_name || `EventGroup ${eg.eventgroup_id}`,
+        event_name: eg.event_name || '',
+        eventgroup_name: eg.eventgroup_name || '',
         has_offer: srv.has_offer,
         subscribed: eg.subscribed,
         subscriber_ecus: eg.subscriber_ecus,
@@ -75,12 +126,11 @@ function rowClass(row) {
 
 function onJump(eg) {
   if (eg.eventgroup_id == null) return
-  const mask = eg.eventgroup_id | 0x8000
   emit('jump-signal', {
     service_id: eg.service_id,
     service_label: eg.service_id_hex,
-    event_id: mask,
-    event_label: `0x${mask.toString(16).toUpperCase()}`,
+    event_id: eg.eventgroup_id | 0x8000,
+    event_label: `0x${(eg.eventgroup_id | 0x8000).toString(16).toUpperCase()}`,
   })
 }
 </script>
@@ -107,21 +157,21 @@ function onJump(eg) {
       <table class="report-table" v-if="rows.length">
         <thead>
           <tr>
-            <th style="width:80px">Service ID</th>
-            <th style="width:70px">EG ID</th>
-            <th style="width:180px">Event 名称</th>
-            <th style="width:55px">Offer</th>
-            <th style="width:65px">Subscribe</th>
-            <th style="width:55px">通知数</th>
-            <th>问题说明</th>
+            <th :style="{ width: colWidths.svc + 'px' }">Service<span class="col-resize" @mousedown="onResizeStart('svc', $event)"></span></th>
+            <th :style="{ width: colWidths.eg + 'px' }">EG ID<span class="col-resize" @mousedown="onResizeStart('eg', $event)"></span></th>
+            <th :style="{ width: colWidths.evt + 'px' }">Event / Group<span class="col-resize" @mousedown="onResizeStart('evt', $event)"></span></th>
+            <th :style="{ width: colWidths.offer + 'px' }">Offer<span class="col-resize" @mousedown="onResizeStart('offer', $event)"></span></th>
+            <th :style="{ width: colWidths.sub + 'px' }">Subscribe<span class="col-resize" @mousedown="onResizeStart('sub', $event)"></span></th>
+            <th :style="{ width: colWidths.notif + 'px' }">通知数<span class="col-resize" @mousedown="onResizeStart('notif', $event)"></span></th>
+            <th>问题说明<span class="col-resize" @mousedown="onResizeStart('issue', $event)"></span></th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="r in rows" :key="r._key" :class="rowClass(r)"
               @click="onJump(r)" :title="r.eventgroup_id != null ? '点击跳转信号曲线' : ''">
-            <td class="mono">{{ r.service_id_hex }}</td>
-            <td class="mono">{{ r.eventgroup_id != null ? '0x' + r.eventgroup_id.toString(16).toUpperCase().padStart(4, '0') : '—' }}</td>
-            <td class="mono" :class="{ 'is-link': r.eventgroup_id != null }">{{ r.event_name }}</td>
+            <td class="mono">{{ fmtSvc(r) }}</td>
+            <td class="mono" :class="{ 'is-link': r.eventgroup_id != null }">{{ fmtEg(r) }}</td>
+            <td class="mono" :class="{ 'is-link': r.eventgroup_id != null }" style="font-size:11px">{{ fmtEvtGroup(r) || '—' }}</td>
             <td><span class="yn" :class="r.has_offer ? 'yn-yes' : 'yn-no'">{{ r.has_offer ? '✓' : '✗' }}</span></td>
             <td><span class="yn" :class="r.subscribed ? 'yn-yes' : 'yn-no'">{{ r.subscribed ? '✓' : '✗' }}</span></td>
             <td class="mono" style="text-align:right">{{ r.notification_count }}</td>
@@ -157,6 +207,12 @@ function onJump(eg) {
 .sum-warn b { color: #e6a23c; }
 .report-table-wrap { flex: 1; overflow: auto; }
 .report-table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+.col-resize {
+  position: absolute; right: 0; top: 0; bottom: 0; width: 6px; cursor: col-resize;
+  background: transparent; transition: background .15s;
+}
+.col-resize:hover { background: #409eff; }
+.report-table th { position: relative; }
 .report-table th {
   position: sticky; top: 0; background: #f7fafd; padding: 7px 8px;
   text-align: left; border-bottom: 1px solid #e5ebf2; font-weight: 700; z-index: 1;
