@@ -112,13 +112,193 @@ class SomeIpPcapParser:
                 "reason": str(exc),
             })
 
+        # ---- TP 分片重组（后处理） ----
+        result["messages"], tp_errors = _reassemble_tp(result["messages"])
+        result["errors"].extend(tp_errors)
+
+        # 重新分配 index
+        for i, msg in enumerate(result["messages"], 1):
+            msg["index"] = i
+
         result["summary"]["parsed_messages"] = len(result["messages"])
         result["summary"]["error_count"] = len(result["errors"])
-        logger.info("Parse done — frames: %d, messages: %d, errors: %d",
+        logger.info("Parse done — frames: %d, messages: %d (after TP reassembly), errors: %d",
                     result["summary"]["total_frames"],
                     result["summary"]["parsed_messages"],
                     result["summary"]["error_count"])
         return result
+
+
+# ---------------------------------------------------------------------------
+# SOME/IP TP 分片重组
+# ---------------------------------------------------------------------------
+
+# TP 分片消息类型的 bit 5 为 1（0x20 掩码）
+_TP_MASK = 0x20
+
+
+def _reassemble_tp(messages: list[dict]) -> tuple[list[dict], list[dict]]:
+    """后处理：将 TP 分片报文重组为完整报文。
+
+    Scapy 的 TP 字段解析有误，这里手动从 raw bytes 16-19 提取真实 offset/more_seg。
+    TP 扩展头 4 字节在 payload_hex 前 8 个字符（4 bytes），真实 payload 从 byte 20 开始。
+    """
+    import struct
+
+    # 分离 TP 和非 TP
+    tp_msgs: list[dict] = []
+    regular: list[dict] = []
+    for m in messages:
+        h = m.get("header", {})
+        tp = h.get("tp")
+        if tp and tp.get("offset", {}).get("dec", 0) >= 0:
+            tp_msgs.append(m)
+        else:
+            regular.append(m)
+
+    if not tp_msgs:
+        return regular, []
+
+    # 手动修正 TP 字段 + 剥离 TP 扩展头
+    for m in tp_msgs:
+        ph = m.get("payload_hex", "")
+        if len(ph) >= 8:
+            tp_word = struct.unpack(">I", bytes.fromhex(ph[:8]))[0]
+            m["_real_offset"] = tp_word & 0x0FFFFFFF
+            m["_real_more"] = (tp_word >> 31) & 0x1
+            m["_real_payload_hex"] = ph[8:]  # 去掉 4-byte TP 扩展头
+        else:
+            m["_real_offset"] = m["header"]["tp"]["offset"]["dec"]
+            m["_real_more"] = m["header"]["tp"]["more_segments"]["dec"]
+            m["_real_payload_hex"] = ph
+
+    # 分组
+    groups: dict[tuple, list[dict]] = {}
+    for m in tp_msgs:
+        h = m["header"]
+        key = (
+            h["service_id"]["dec"],
+            h["method_id"]["dec"],
+            h.get("session_id", {}).get("dec", 0),
+            h.get("client_id", {}).get("dec", 0),
+            m.get("src_ip", ""),
+            m.get("dst_ip", ""),
+            m.get("src_port", 0),
+            m.get("dst_port", 0),
+        )
+        groups.setdefault(key, []).append(m)
+
+    errors: list[dict] = []
+    reassembled: list[dict] = []
+
+    for key, frags in groups.items():
+        # 按真实 offset 排序
+        frags.sort(key=lambda m: m["_real_offset"])
+
+        # 按 offset 连续性拆分为多个 sub-sequence
+        seqs = _split_tp_sequences(frags, key, errors)
+        for seq in seqs:
+            if not seq:
+                continue
+
+            # 未完成的序列 → 保留原分片
+            if seq[-1].get("_real_more", 0) != 0:
+                regular.extend(seq)
+                continue
+
+            # 拼接（使用剥离 TP 头的真实 payload）
+            first = seq[0]
+            payload_parts: list[bytes] = []
+            for f in seq:
+                rph = f.get("_real_payload_hex", f.get("payload_hex", ""))
+                if rph:
+                    payload_parts.append(bytes.fromhex(rph))
+
+            full_payload = b"".join(payload_parts)
+            base_msg_type = first["header"]["message_type"]["dec"] & ~_TP_MASK
+
+            new_header = dict(first["header"])
+            new_header["message_type"] = {
+                "dec": base_msg_type,
+                "hex": f"0x{base_msg_type:02X}",
+            }
+            new_header["length"] = {
+                "dec": len(full_payload),
+                "hex": f"0x{len(full_payload):08X}",
+            }
+            new_header.pop("tp", None)
+
+            reassembled.append({
+                "index": 0,
+                "frame_index": first.get("frame_index", 0),
+                "transport": first.get("transport", "UDP"),
+                "src_ip": first.get("src_ip", ""),
+                "dst_ip": first.get("dst_ip", ""),
+                "src_port": first.get("src_port", 0),
+                "dst_port": first.get("dst_port", 0),
+                "endpoint": first.get("endpoint", {}),
+                "header": new_header,
+                "payload_hex": full_payload.hex(),
+                "payload_length": len(full_payload),
+                "raw_header_hex": first.get("raw_header_hex", ""),
+            })
+
+    # SD 后处理也要对重组后的消息做（在 parse 循环中已经对分片做过了，重组后需要重做）
+    for m in reassembled:
+        if m["header"]["service_id"]["dec"] == SOMEIP_SD_SERVICE_ID:
+            sd_data = _parse_sd_payload(bytes.fromhex(m["payload_hex"]))
+            if sd_data is not None:
+                m["sd"] = sd_data
+
+    return regular + reassembled, errors
+
+
+def _split_tp_sequences(
+    frags: list[dict], key: tuple, errors: list[dict]
+) -> list[list[dict]]:
+    """按 offset 连续性将分片拆为多个 sub-sequence。
+
+    同一 key 下可能有多条 TP 消息交替分片；用多序列并行追踪，
+    每条 fragment 匹配到已存在的 pending 序列或新建序列。
+    """
+    if not frags:
+        return []
+
+    frags.sort(key=lambda m: m.get("_real_offset", 0))
+    pending: list[list[dict]] = []  # 并行追踪中的序列
+
+    for f in frags:
+        off = f.get("_real_offset", 0)
+        matched = False
+
+        # 尝试匹配到已有的 pending 序列
+        for seq in pending:
+            last = seq[-1]
+            if last.get("_real_more", 0) == 0:
+                continue
+            # 计算该序列当前的 expected offset
+            seq_expected = seq[0].get("_real_offset", 0) \
+                + sum(len(fr.get("_real_payload_hex", fr.get("payload_hex", ""))) // 2
+                      for fr in seq)
+            if off == seq_expected:
+                seq.append(f)
+                matched = True
+                break
+
+        if not matched:
+            pending.append([f])
+
+    result: list[list[dict]] = []
+    for seq in pending:
+        if seq[-1].get("_real_more", 0) != 0:
+            errors.append({
+                "type": "tp_incomplete",
+                "reason": f"TP incomplete: last fragment still has more_segments=1 for "
+                          f"srv=0x{key[0]:04X} method=0x{key[1]:04X} session={key[2]}",
+            })
+        result.append(seq)
+
+    return result
 
 
 # ---------------------------------------------------------------------------

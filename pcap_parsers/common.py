@@ -96,18 +96,62 @@ class ParseResultDict(TypedDict):
     errors: list[dict[str, Any]]
     summary: SummaryDict
 
-# SOME/IP 协议规定合法的 message_type（消息类型）集合
 # SOME/IP-SD 固定 Service ID
 SOMEIP_SD_SERVICE_ID = 0xFFFF
 
-VALID_MESSAGE_TYPES = {
-    0x00, 0x01, 0x02,   # 请求类消息
-    0x20, 0x21, 0x22,   # 响应类消息
-    0x40, 0x41, 0x42,   # 错误响应
-    0x80, 0x81, 0x82,   # 通知（Notification）
-    0xA0, 0xA1, 0xA2,   # 事件（Event）
-    0xC0, 0xC1, 0xC2,   # 字段（Field）
+# ═══════════════════════════════════════════════════════════════════
+# SOME/IP Message Type 统一映射
+# ═══════════════════════════════════════════════════════════════════
+
+# msg_type → 内部方向标识
+_MSG_TYPE_TO_DIRECTION: dict[int, str] = {
+    0x00: "request",            # REQUEST
+    0x01: "request",            # REQUEST_NO_RETURN
+    0x20: "request",            # TP_REQUEST
+    0x21: "request",            # TP_REQUEST_NO_RETURN
+    0x02: "notification",       # NOTIFICATION
+    0x22: "notification",       # TP_NOTIFICATION
+    0x80: "response",           # RESPONSE
+    0xA0: "response",           # TP_RESPONSE
+    0x81: "error",              # ERROR
 }
+
+# msg_type → 人类可读标签
+_MSG_TYPE_LABELS: dict[int, str] = {
+    0x00: "Request",
+    0x01: "Request (No Return)",
+    0x20: "Request (TP)",
+    0x21: "Request No Return (TP)",
+    0x02: "Notification",
+    0x22: "Notification (TP)",
+    0x80: "Response",
+    0xA0: "Response (TP)",
+    0x81: "Error",
+}
+
+# 合法 message_type 全集
+VALID_MESSAGE_TYPES: set[int] = set(_MSG_TYPE_TO_DIRECTION.keys())
+
+# 通知类消息（Notification + TP_Notification）
+NOTIFICATION_TYPES: set[int] = {0x02, 0x22}
+
+# 事件 ID 高位掩码（线上 event_id 最高位固定为 1）
+EVENT_ID_MASK = 0x7FFF
+
+
+def get_msg_direction(msg_type: int) -> str:
+    """SOME/IP message_type → 内部方向标识（request/response/error/notification）。"""
+    return _MSG_TYPE_TO_DIRECTION.get(msg_type, "request")
+
+
+def is_notification(msg_type: int) -> bool:
+    """是否为通知/事件类报文（含 TP 分片版本）。"""
+    return msg_type in NOTIFICATION_TYPES
+
+
+def message_type_label(message_type: int) -> str:
+    """SOME/IP message_type → 人类可读标签。"""
+    return _MSG_TYPE_LABELS.get(message_type, f"0x{message_type:02X}")
 
 # 格式化数字，统一输出十进制 + 十六进制
 # width：控制十六进制补 0 对齐（比如 width=4 → 0x0001，width=2 → 0x01）
@@ -260,23 +304,6 @@ def build_error_dict(
         error["raw_header_hex"] = raw_bytes[:16].hex()
         error["transport_payload_length"] = len(raw_bytes)
     return error
-
-
-# ======================================================================
-# SOME/IP 报文类型 → 可读标签
-# ======================================================================
-
-def message_type_label(message_type: int) -> str:
-    """将 SOME/IP message_type 数值转为可读标签。"""
-    if message_type in {0x00, 0x01}:
-        return "Request"
-    if message_type == 0x02:
-        return "Notification"
-    if message_type == 0x80:
-        return "Response"
-    if message_type == 0x81:
-        return "Error"
-    return f"0x{message_type:02X}"
 
 
 # ======================================================================

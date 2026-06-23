@@ -11,11 +11,14 @@ from analysis.signal_utils import (
     detect_transitions,
     get_field_value,
 )
+from pcap_parsers.common import (
+    EVENT_ID_MASK,
+    SOMEIP_SD_SERVICE_ID,
+    is_notification,
+)
 from web.backend.handlers.analysis import get_session
 
-_SD_SERVICE_ID = 0xFFFF
-_NOTIFICATION_TYPE = 0x02
-_EVENT_ID_MASK = 0x7FFF
+_SD_SERVICE_ID = SOMEIP_SD_SERVICE_ID
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -38,7 +41,7 @@ def get_signal_meta(session_id: str) -> list[dict[str, Any]]:
 
         if srv_id == _SD_SERVICE_ID:
             continue
-        if msg_type != _NOTIFICATION_TYPE:
+        if not is_notification(msg_type):
             continue
         if msg.get("parse_status") != "ok":
             continue
@@ -101,13 +104,13 @@ def get_signal_data(
 
         if srv_id != service_id:
             continue
-        if msg_type != _NOTIFICATION_TYPE:
+        if not is_notification(msg_type):
             continue
         if msg.get("parse_status") != "ok":
             continue
         if not msg.get("parsed"):
             continue
-        if mid != event_id and (mid & _EVENT_ID_MASK) != event_id:
+        if mid != event_id and (mid & EVENT_ID_MASK) != event_id:
             continue
 
         candidates.append(msg)

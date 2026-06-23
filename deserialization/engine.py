@@ -9,17 +9,17 @@ from typing import Any
 
 from datatypes.types import DataType
 from deserialization.field_node import FieldNode
+from pcap_parsers.common import (
+    EVENT_ID_MASK,
+    SOMEIP_SD_SERVICE_ID,
+    get_msg_direction,
+)
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_REQUEST_TYPES = {0x00, 0x01}
-_RESPONSE_TYPES = {0x80}
-_ERROR_TYPES = {0x81}
-_NOTIFICATION_TYPES = {0x02}
-
-_SD_SERVICE_ID = 0xFFFF
-_EVENT_ID_MASK = 0x7FFF
+_SD_SERVICE_ID = SOMEIP_SD_SERVICE_ID
+_EVENT_ID_MASK = EVENT_ID_MASK
 
 
 class DeserializationEngine:
@@ -77,12 +77,4 @@ class DeserializationEngine:
 
     @staticmethod
     def _msg_type_to_direction(msg_type: int) -> str:
-        if msg_type in _REQUEST_TYPES:
-            return "request"
-        if msg_type in _RESPONSE_TYPES:
-            return "response"
-        if msg_type in _ERROR_TYPES:
-            return "error"
-        if msg_type in _NOTIFICATION_TYPES:
-            return "notification"
-        return "request"
+        return get_msg_direction(msg_type)

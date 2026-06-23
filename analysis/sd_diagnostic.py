@@ -9,8 +9,9 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-_SD_SERVICE_ID = 0xFFFF
-_NOTIFICATION_TYPE = 0x02
+from pcap_parsers.common import SOMEIP_SD_SERVICE_ID, is_notification
+
+_SD_SERVICE_ID = SOMEIP_SD_SERVICE_ID
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -88,7 +89,7 @@ def build_subscription_report(
         h = msg.get("header", {})
         sid = h.get("service_id", {}).get("dec", 0)
         mt = h.get("message_type", {}).get("dec", 0)
-        if sid == _SD_SERVICE_ID or mt != _NOTIFICATION_TYPE:
+        if sid == _SD_SERVICE_ID or not is_notification(mt):
             continue
         mid = h.get("method_id", {}).get("dec", 0)
         notif_count[(sid, mid)] += 1

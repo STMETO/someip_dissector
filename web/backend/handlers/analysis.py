@@ -11,7 +11,7 @@ from typing import Any
 
 from fastapi import UploadFile
 
-from pcap_parsers.common import message_type_label
+from pcap_parsers.common import EVENT_ID_MASK, message_type_label
 from pcap_parsers.message_view import build_message_raw_view
 from pcap_parsers.parser import SomeIpPcapParser
 from pcap_parsers.strategies import TcpSomeIpStrategy, UdpSomeIpStrategy
@@ -188,10 +188,10 @@ def _resolve_method_name(registry: Any, msg: dict) -> str:
             sid = msg["header"]["service_id"]["dec"]
             mid = msg["header"]["method_id"]["dec"]
             # notification 的 event_id 带 0x8000 高位，先去掉再查
-            n = registry.lookup_event_name(sid, mid & 0x7FFF)
+            n = registry.lookup_event_name(sid, mid & EVENT_ID_MASK)
             if n:
                 return n
-            n = registry.lookup_method_name(sid, mid & 0x7FFF)
+            n = registry.lookup_method_name(sid, mid & EVENT_ID_MASK)
             if n:
                 return n
             # 兜底：原值查

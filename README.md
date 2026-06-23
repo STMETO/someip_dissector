@@ -178,7 +178,6 @@ pytest test/ -v
 | **数据视图分离** | `pcap_parsers/message_view.py` | 展示树构建与解析逻辑解耦；web 层仅做管道编排，不包含数据变换 |
 
 ## TODO LIST
-* 信号时序多曲线同时显示
 * Method Request/Response/Error 的正确性处理
 * [Emergency] msg type 的全面性兼容，如msg_type = 0x22 目前没有支持
 * [Feature] 双端pcap包的通信正确性检查
