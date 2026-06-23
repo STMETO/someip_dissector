@@ -24,6 +24,7 @@ from web.backend.handlers.analysis import (
     get_session,
     run_upload_and_parse,
 )
+from web.backend.handlers.sd_diagnostic import get_subscription_report
 from web.backend.handlers.signal_timing import get_signal_data, get_signal_meta
 
 _FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
@@ -78,6 +79,20 @@ async def get_message_detail(session_id: str, index: int) -> JSONResponse:
     if detail is None:
         raise HTTPException(status_code=404, detail="消息索引不存在")
     return JSONResponse(detail)
+
+
+# ---- 订阅诊断 ----
+
+@app.get("/api/analysis/subscription-report")
+async def subscription_report(session_id: str) -> JSONResponse:
+    """返回 SD 订阅诊断报告。"""
+    try:
+        result = get_subscription_report(session_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="会话不存在或已过期")
+    return JSONResponse(result)
 
 
 # ---- 信号时序分析 ----

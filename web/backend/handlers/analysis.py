@@ -29,6 +29,7 @@ class _SessionState:
     session_id: str
     session_dir: Path
     messages: list[dict[str, Any]]
+    registry: Any = None          # ServiceRegistry，供诊断分析用
     total_messages: int = 0
     parsed_count: int = 0
     keep_temp: bool = False
@@ -105,7 +106,8 @@ async def run_upload_and_parse(
 
     state = _SessionState(
         session_id=session_id, session_dir=session_dir,
-        messages=messages, total_messages=len(messages),
+        messages=messages, registry=registry,
+        total_messages=len(messages),
         parsed_count=parsed_count, keep_temp=keep_temp,
     )
     _sessions[session_id] = state

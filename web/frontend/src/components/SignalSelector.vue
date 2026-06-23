@@ -5,6 +5,7 @@ const props = defineProps({
   sessionId: { type: String, required: true },
   meta: { type: Array, default: () => [] },
   loading: Boolean,
+  prefill: { type: Object, default: null },
 })
 const emit = defineEmits(['generate'])
 
@@ -43,6 +44,21 @@ watch(selectedEvtIdx, (idx) => {
     fields.value = []
   }
   selectedField.value = ''
+})
+
+// 从诊断页跳转时预选
+watch([() => props.prefill, () => props.meta], ([pf]) => {
+  if (!pf || !services.value.length) return
+  const svcIdx = services.value.findIndex(s => s.service_id === pf.service_id)
+  if (svcIdx >= 0) {
+    selectedSvcIdx.value = svcIdx
+    // 等 events 更新后再选 event
+    const evts = services.value[svcIdx].events || []
+    const evtIdx = evts.findIndex(e => e.event_id === pf.event_id)
+    if (evtIdx >= 0) {
+      selectedEvtIdx.value = evtIdx
+    }
+  }
 })
 
 const svcOptions = () => services.value.map((s, i) => ({

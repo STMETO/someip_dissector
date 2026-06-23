@@ -7,18 +7,27 @@ import { fetchSignalMeta, fetchSignalData, fetchMessageDetail } from '../api'
 
 const props = defineProps({
   sessionId: { type: String, required: true },
+  prefill: { type: Object, default: null },
 })
 
 const meta = ref([])
 const loading = ref(false)
 const chartData = ref(null)
 const selectInfo = ref(null)
-const detailMsg = ref(null)
 
 // 加载级联选择器数据
 watch(() => props.sessionId, (sid) => {
   if (sid) loadMeta(sid)
 }, { immediate: true })
+
+// 从诊断页跳转时自动生成曲线
+watch(() => props.prefill, (pf) => {
+  if (pf && meta.value.length) {
+    // 找到 service 在 meta 中的位置
+    selectInfo.value = pf
+    onGenerate(pf)
+  }
+})
 
 async function loadMeta(sid) {
   try {
@@ -61,6 +70,7 @@ function onMsgSelect(msg) {
       :sessionId="sessionId"
       :meta="meta"
       :loading="loading"
+      :prefill="prefill"
       @generate="onGenerate"
     />
     <div class="signal-workspace">

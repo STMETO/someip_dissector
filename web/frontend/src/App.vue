@@ -4,6 +4,7 @@ import UploadBar from './components/UploadBar.vue'
 import MessageTable from './components/MessageTable.vue'
 import ParseTree from './components/ParseTree.vue'
 import SignalTiming from './components/SignalTiming.vue'
+import SubscriptionReport from './components/SubscriptionReport.vue'
 import { fetchMessages, fetchMessageDetail, deleteSession, exportUrl } from './api'
 
 const SPLIT_STORAGE_KEY = 'someip-ui-split-percent'
@@ -19,10 +20,16 @@ const uploading = ref(false)    // 上传+后台解析中
 const searchText = ref('')
 const progress = ref(0)         // 0-100, 消息加载进度
 const progressText = ref('')
-const currentTab = ref('parse')  // 'parse' | 'signal'
+const currentTab = ref('parse')  // 'parse' | 'signal' | 'subscription'
+const signalPrefill = ref(null) // 从诊断页跳转时预填参数
 
 // 切换会话时回到解析页
-watch(sessionId, () => { currentTab.value = 'parse' })
+watch(sessionId, () => { currentTab.value = 'parse'; signalPrefill.value = null })
+
+function onJumpToSignal(params) {
+  signalPrefill.value = params
+  currentTab.value = 'signal'
+}
 
 // 分割条位置 (左栏百分比)
 const splitPercent = ref(_loadSplitPercent())
@@ -116,6 +123,9 @@ function _loadSplitPercent() {
       <button class="tab-btn" :class="{ active: currentTab === 'signal' }" @click="currentTab = 'signal'">
         📈 信号时序
       </button>
+      <button class="tab-btn" :class="{ active: currentTab === 'subscription' }" @click="currentTab = 'subscription'">
+        🔍 订阅诊断
+      </button>
     </nav>
     <!-- 报文解析视图 -->
     <div class="workspace" v-if="sessionId && currentTab === 'parse'">
@@ -134,7 +144,11 @@ function _loadSplitPercent() {
     </div>
     <!-- 信号时序视图 -->
     <div class="workspace" v-if="sessionId && currentTab === 'signal'">
-      <SignalTiming :sessionId="sessionId" />
+      <SignalTiming :sessionId="sessionId" :prefill="signalPrefill" />
+    </div>
+    <!-- 订阅诊断视图 -->
+    <div class="workspace" v-if="sessionId && currentTab === 'subscription'">
+      <SubscriptionReport :sessionId="sessionId" @jump-signal="onJumpToSignal" />
     </div>
   </div>
 </template>

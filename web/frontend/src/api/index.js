@@ -37,6 +37,13 @@ export async function fetchSignalData(sessionId, serviceId, eventId, fieldPath) 
   return data
 }
 
+export async function fetchSubscriptionReport(sessionId) {
+  const { data } = await api.get('/analysis/subscription-report', {
+    params: { session_id: sessionId },
+  })
+  return data
+}
+
 export function exportUrl(sessionId, filename) {
   return `/api/export/${sessionId}/${filename}`
 }
