@@ -123,7 +123,7 @@ someip_dissector/
 ├── Tools/
 │   └── generate_sample_pcap.py         # 测试用 pcap 生成器
 │
-├── run.sh                              # 统一启动脚本（唯一入口）
+├── run.py                              # 跨平台启动器（唯一入口）
 └── README.md
 ```
 
@@ -169,15 +169,15 @@ PCAP 原始报文
 ### 统一入口
 
 ```bash
-./run.sh              # 查看用法
-./run.sh web          # 启动 Web 界面
-./run.sh debug [选项] # 命令行批处理
+python run.py                     # 查看用法
+python run.py web                 # 启动 Web 界面
+python run.py debug [选项]        # 命令行批处理
 ```
 
 ### Web 界面
 
 ```bash
-./run.sh web
+python run.py web
 ```
 
 浏览器打开 **http://localhost:8000**：
@@ -196,10 +196,10 @@ PCAP 原始报文
 ### 命令行调试
 
 ```bash
-./run.sh debug                           # 默认参数
-./run.sh debug --pcap my.pcap --arxml my.arxml
-./run.sh debug --log-level INFO --output /tmp/out
-./run.sh debug --help                    # 查看所有选项
+python run.py debug                           # 默认参数
+python run.py debug --pcap my.pcap --arxml my.arxml
+python run.py debug --log-level INFO --output /tmp/out
+python run.py debug --help                    # 查看所有选项
 ```
 
 | 参数 | 默认值 | 说明 |
