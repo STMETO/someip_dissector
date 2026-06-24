@@ -116,6 +116,9 @@ class SomeIpPcapParser:
         result["messages"], tp_errors = _reassemble_tp(result["messages"])
         result["errors"].extend(tp_errors)
 
+        # 按 frame_index 排序（重组消息插入到第一个分片的原始位置）
+        result["messages"].sort(key=lambda m: m.get("frame_index", 0))
+
         # 重新分配 index
         for i, msg in enumerate(result["messages"], 1):
             msg["index"] = i
@@ -143,8 +146,6 @@ def _reassemble_tp(messages: list[dict]) -> tuple[list[dict], list[dict]]:
     Scapy 的 TP 字段解析有误，这里手动从 raw bytes 16-19 提取真实 offset/more_seg。
     TP 扩展头 4 字节在 payload_hex 前 8 个字符（4 bytes），真实 payload 从 byte 20 开始。
     """
-    import struct
-
     # 分离 TP 和非 TP
     tp_msgs: list[dict] = []
     regular: list[dict] = []
@@ -159,14 +160,13 @@ def _reassemble_tp(messages: list[dict]) -> tuple[list[dict], list[dict]]:
     if not tp_msgs:
         return regular, []
 
-    # 手动修正 TP 字段 + 剥离 TP 扩展头
+    # 剥离 TP 扩展头（bytes 16-19），Scapy 的 offset/more_seg 值本身是正确的
     for m in tp_msgs:
         ph = m.get("payload_hex", "")
         if len(ph) >= 8:
-            tp_word = struct.unpack(">I", bytes.fromhex(ph[:8]))[0]
-            m["_real_offset"] = tp_word & 0x0FFFFFFF
-            m["_real_more"] = (tp_word >> 31) & 0x1
-            m["_real_payload_hex"] = ph[8:]  # 去掉 4-byte TP 扩展头
+            m["_real_offset"] = m["header"]["tp"]["offset"]["dec"]
+            m["_real_more"] = m["header"]["tp"]["more_segments"]["dec"]
+            m["_real_payload_hex"] = ph[8:]  # 去掉前 4 字节 TP 扩展头
         else:
             m["_real_offset"] = m["header"]["tp"]["offset"]["dec"]
             m["_real_more"] = m["header"]["tp"]["more_segments"]["dec"]
