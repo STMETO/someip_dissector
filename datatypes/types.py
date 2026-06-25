@@ -269,19 +269,37 @@ class ArrayType(DataType):
                     name=name, type_name=self.name, offset=offset,
                     byte_size=0, children=[])
                 return node, 0
-            actual_len = struct.unpack(">I", payload[pos:pos + 4])[0]
+            byte_len = struct.unpack(">I", payload[pos:pos + 4])[0]
             pos += 4
+            end_pos = min(pos + byte_len, len(payload))
         else:
-            actual_len = self.length
+            byte_len = 0
+            end_pos = len(payload)
 
         if self.element_type is not None:
-            for i in range(actual_len):
-                if pos >= len(payload):
-                    break
-                child, consumed = self.element_type.deserialize(
-                    payload, pos, f"{name}[{i}]")
-                children.append(child)
-                pos += consumed
+            if self.is_dynamic:
+                index = 0
+                while pos < end_pos:
+                    child, consumed = self.element_type.deserialize(
+                        payload, pos, f"{name}[{index}]")
+                    if consumed <= 0:
+                        raise ValueError(
+                            f"dynamic array element consumed {consumed} bytes for {self.name}")
+                    next_pos = pos + consumed
+                    if next_pos > end_pos:
+                        raise ValueError(
+                            f"dynamic array {self.name} overruns declared byte length {byte_len}")
+                    children.append(child)
+                    pos = next_pos
+                    index += 1
+            else:
+                for i in range(self.length):
+                    if pos >= len(payload):
+                        break
+                    child, consumed = self.element_type.deserialize(
+                        payload, pos, f"{name}[{i}]")
+                    children.append(child)
+                    pos += consumed
 
         node = _import_field_node().container(
             name=name, type_name=self.name, offset=offset,
@@ -293,3 +311,4 @@ class ArrayType(DataType):
         if self.element_type is not None:
             return self.element_type.byte_size * self.length
         return 0
+    
