@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import re
 from typing import ClassVar
 
 from .arxml_parser import RawBaseType, RawDataType
@@ -56,6 +57,18 @@ class _ValueBuilder(TypeBuilder):
                 byte_order=_map_byte_order(bt.byte_order),
                 is_signed="int" in bt.name.lower() or "sint" in bt.name.lower(),
                 is_float=is_float,
+            )
+        inferred = _infer_primitive_spec(raw.name)
+        if inferred is not None:
+            if inferred["is_bool"]:
+                return BoolType(name=raw.name, path=raw.path)
+            return BaseType(
+                name=raw.name,
+                path=raw.path,
+                bit_length=inferred["bit_length"],
+                byte_order="big",
+                is_signed=inferred["is_signed"],
+                is_float=inferred["is_float"],
             )
         return BaseType(name=raw.name, path=raw.path, bit_length=32)
 
@@ -256,6 +269,18 @@ class TypeFactory:
                     byte_order=_map_byte_order(bt.byte_order),
                     is_signed="int" in bt.name.lower(),
                 )
+            inferred = _infer_primitive_spec(dt.name)
+            if inferred is not None:
+                if inferred["is_bool"]:
+                    return BoolType(name=dt.name, path=dt.path)
+                return BaseType(
+                    name=dt.name,
+                    path=dt.path,
+                    bit_length=inferred["bit_length"],
+                    byte_order="big",
+                    is_signed=inferred["is_signed"],
+                    is_float=inferred["is_float"],
+                )
             break
 
         # 解析失败兜底：返回未解析占位类型，避免代码抛None异常
@@ -322,3 +347,42 @@ def _map_byte_order(bo: str) -> str:
     if "LITTLE" in m:
         return "little"
     return "big"  # OPAQUE / BIG-ENDIAN / MOST-SIGNIFICANT → big
+
+
+def _infer_primitive_spec(name: str) -> dict[str, int | bool] | None:
+    """在 ARXML 缺失 SW-BASE-TYPE 时，根据常见实现类型名推断基础类型。"""
+    normalized = name.strip().lower()
+    if normalized in {"bool", "boolean"}:
+        return {
+            "bit_length": 8,
+            "is_signed": False,
+            "is_float": False,
+            "is_bool": True,
+        }
+
+    if normalized in {"float", "float32", "float32_t"}:
+        return {
+            "bit_length": 32,
+            "is_signed": True,
+            "is_float": True,
+            "is_bool": False,
+        }
+    if normalized in {"double", "float64", "float64_t"}:
+        return {
+            "bit_length": 64,
+            "is_signed": True,
+            "is_float": True,
+            "is_bool": False,
+        }
+
+    match = re.fullmatch(r"(?:(u?)int|sint)(8|16|32|64)(?:_t)?", normalized)
+    if match is not None:
+        is_unsigned_prefix, bits = match.groups()
+        return {
+            "bit_length": int(bits),
+            "is_signed": not bool(is_unsigned_prefix),
+            "is_float": False,
+            "is_bool": False,
+        }
+
+    return None

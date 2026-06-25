@@ -146,10 +146,10 @@ function onJump(eg) {
 
     <!-- 摘要 -->
     <div class="report-summary" v-if="report?.summary">
-      <span class="sum-pill">服务 {{ report.summary.total_services }}</span>
-      <span class="sum-pill">冲突 <b>{{ report.summary.conflict_count }}</b></span>
-      <span class="sum-pill sum-warn">静默 <b>{{ report.summary.silent_count }}</b></span>
-      <span class="sum-pill">无Offer {{ report.summary.no_offer_count }}</span>
+      <span class="sum-pill">服务数 <b>{{ report.summary.total_services }}</b></span>
+      <span class="sum-pill">Offer 冲突 <b>{{ report.summary.conflict_count }}</b></span>
+      <span class="sum-pill sum-warn">已订阅但无通知 <b>{{ report.summary.silent_count }}</b></span>
+      <span class="sum-pill">有订阅但无 Offer <b>{{ report.summary.no_offer_count }}</b></span>
     </div>
 
     <!-- 表格 -->

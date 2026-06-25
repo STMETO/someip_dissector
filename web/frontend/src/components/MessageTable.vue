@@ -95,6 +95,10 @@ function statusClass(s) {
   if (s === 'sd') return 'tag-sd'
   return 'tag-fail'
 }
+
+function resolvedCount(messages) {
+  return (messages || []).filter(m => m.parse_status !== 'unresolved').length
+}
 </script>
 
 <template>
@@ -103,7 +107,7 @@ function statusClass(s) {
       <div class="msg-title-block">
         <span class="msg-title">消息列表 ({{ filtered.length }} 条)
         <template v-if="!loading && props.messages?.length">
-          · 已解析 {{ props.messages.filter(m => m.parse_status === 'ok').length }}
+          · 已解析 {{ resolvedCount(props.messages) }}
         </template>
         </span>
         <span class="msg-subtitle">支持多关键字组合搜索，如 0x1234 response ok</span>

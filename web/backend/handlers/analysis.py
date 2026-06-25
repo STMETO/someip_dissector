@@ -38,6 +38,10 @@ class _SessionState:
 _sessions: dict[str, _SessionState] = {}
 
 
+def _is_resolved_status(status: str) -> bool:
+    return status != "unresolved"
+
+
 # ═══════════════════════════════════════════════════════════════════
 # 解析管道
 # ═══════════════════════════════════════════════════════════════════
@@ -84,13 +88,13 @@ async def run_upload_and_parse(
             if tree is not None:
                 msg["parsed"] = tree.to_dict()
                 msg["parse_status"] = "ok"
-                parsed_count += 1
             else:
                 msg["parse_status"] = "unresolved"
 
         msg["raw_view"] = build_message_raw_view(msg).to_dict()
-        msg["message_kind"] = message_type_label(
-            msg["header"]["message_type"]["dec"])
+        msg["message_kind"] = _resolve_message_kind(msg)
+        if _is_resolved_status(msg["parse_status"]):
+            parsed_count += 1
         messages.append(msg)
 
     if keep_temp:
@@ -204,6 +208,36 @@ def _resolve_method_name(registry: Any, msg: dict) -> str:
     except Exception:
         pass
     return ""
+
+
+def _resolve_message_kind(msg: dict[str, Any]) -> str:
+    header = msg.get("header", {})
+    srv_id = header.get("service_id", {}).get("dec", 0)
+    if srv_id != _SD_SERVICE_ID:
+        return message_type_label(header.get("message_type", {}).get("dec", 0))
+
+    entries = msg.get("sd", {}).get("entries", [])
+    if not entries:
+        return "SD"
+
+    labels: list[str] = []
+    seen: set[str] = set()
+    for entry in entries:
+        label = _sd_entry_kind_label(entry.get("type", ""))
+        if label not in seen:
+            labels.append(label)
+            seen.add(label)
+    return "/".join(labels) if labels else "SD"
+
+
+def _sd_entry_kind_label(entry_type: str) -> str:
+    if entry_type in {"OfferService", "StopOfferService"}:
+        return "Offer"
+    if entry_type == "SubscribeEventGroup":
+        return "Subscribe"
+    if entry_type in {"SubscribeEventGroupAck", "SubscribeEventgroupAck", "SubscribeEventGroupNack"}:
+        return "SubscribeAck"
+    return entry_type or "SD"
 
 
 def build_message_detail(messages: list[dict[str, Any]], index: int) -> dict | None:

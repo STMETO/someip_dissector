@@ -110,23 +110,25 @@ function _loadSplitPercent() {
         {{ uploading ? '后台解析中，请耐心等待...' : (progressText || '加载中...') }}
       </span>
     </div>
-    <section class="overview-bar" v-if="sessionId">
-      <span class="overview-pill mono">会话 {{ sessionId }}</span>
-      <span class="overview-pill">报文 {{ summary.total_messages || 0 }}</span>
-      <span class="overview-pill is-ok">已解析 {{ summary.parsed_count || 0 }}</span>
-      <span class="overview-pill">导出 {{ hasExport ? '开启' : '关闭' }}</span>
+    <section class="top-strip" v-if="sessionId">
+      <nav class="tab-bar">
+        <button class="tab-btn" :class="{ active: currentTab === 'parse' }" @click="currentTab = 'parse'">
+          📋 报文解析
+        </button>
+        <button class="tab-btn" :class="{ active: currentTab === 'signal' }" @click="currentTab = 'signal'">
+          📈 信号时序
+        </button>
+        <button class="tab-btn" :class="{ active: currentTab === 'subscription' }" @click="currentTab = 'subscription'">
+          🔍 订阅诊断
+        </button>
+      </nav>
+      <section class="overview-bar">
+        <span class="overview-pill mono">会话 {{ sessionId }}</span>
+        <span class="overview-pill">报文 {{ summary.total_messages || 0 }}</span>
+        <span class="overview-pill is-ok">已解析 {{ summary.parsed_count || 0 }}</span>
+        <span class="overview-pill">导出 {{ hasExport ? '开启' : '关闭' }}</span>
+      </section>
     </section>
-    <nav class="tab-bar" v-if="sessionId">
-      <button class="tab-btn" :class="{ active: currentTab === 'parse' }" @click="currentTab = 'parse'">
-        📋 报文解析
-      </button>
-      <button class="tab-btn" :class="{ active: currentTab === 'signal' }" @click="currentTab = 'signal'">
-        📈 信号时序
-      </button>
-      <button class="tab-btn" :class="{ active: currentTab === 'subscription' }" @click="currentTab = 'subscription'">
-        🔍 订阅诊断
-      </button>
-    </nav>
     <!-- 报文解析视图 -->
     <div class="workspace" v-show="sessionId && currentTab === 'parse'">
       <div class="pane pane-left" :style="{ width: splitPercent + '%' }">
@@ -193,7 +195,7 @@ html, body, #app {
 }
 .overview-bar {
   display: flex; flex-wrap: wrap; gap: 8px;
-  padding: 8px 10px 0; flex-shrink: 0;
+  justify-content: flex-end; align-items: center; flex-shrink: 0;
 }
 .overview-pill {
   display: inline-flex; align-items: center; min-height: 28px; padding: 0 10px;
@@ -201,9 +203,13 @@ html, body, #app {
   box-shadow: 0 4px 10px rgba(31, 45, 61, 0.05); font-size: 12px; color: #556273;
 }
 .overview-pill.is-ok { color: #2f8f51; border-color: #b9dfc5; background: rgba(237, 250, 242, 0.96); }
+.top-strip {
+  display: flex; align-items: flex-end; justify-content: space-between; gap: 12px;
+  padding: 8px 10px 0; flex-shrink: 0;
+}
 /* ---- Tab 切换栏 ---- */
 .tab-bar {
-  display: flex; gap: 2px; padding: 0 10px; flex-shrink: 0;
+  display: flex; gap: 2px; flex-shrink: 0;
 }
 .tab-btn {
   padding: 7px 20px; border: 1px solid #d8e0ea; background: rgba(255,255,255,0.7);
@@ -225,6 +231,8 @@ html, body, #app {
   100% { margin-left: 100%; }
 }
 @media (max-width: 900px) {
+  .top-strip { flex-direction: column; align-items: stretch; gap: 8px; }
+  .overview-bar { justify-content: flex-start; }
   .workspace { flex-direction: column; padding: 8px; }
   .pane-left, .pane-right { width: 100% !important; min-width: 0; min-height: 280px; }
   .splitter { display: none; }
