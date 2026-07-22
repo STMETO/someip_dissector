@@ -102,9 +102,13 @@ function renderChart() {
       trigger: 'axis',
       formatter(params) {
         if (!Array.isArray(params)) params = [params]
-        return params.filter(p => !p.seriesName.includes('跳变')).map(p =>
-          `<b>${p.seriesName}</b><br/>Seq: ${p.name}<br/>值: <b>${p.value}</b>`
-        ).join('<br/>')
+        return params.filter(p => !p.seriesName.includes('跳变')).map(p => {
+          const fi = legendData.indexOf(p.seriesName)
+          const pt = fi >= 0 ? data.fields[fi]?.points?.[p.dataIndex] : null
+          const time = pt ? formatTimestamp(pt.timestamp_epoch) : '-'
+          const frame = pt?.frame_index ?? '-'
+          return `<b>${p.seriesName}</b><br/>Time: ${time}<br/>Frame: ${frame}<br/>Seq: ${pt?.seq ?? p.name}<br/>值: <b>${p.value}</b>`
+        }).join('<br/>')
       },
     },
     grid: { left: 52, right: 20, top: 60, bottom: 36 },
@@ -134,6 +138,14 @@ function renderChart() {
       }
     }
   })
+}
+
+function formatTimestamp(epoch) {
+  const n = Number(epoch)
+  if (!Number.isFinite(n) || n <= 0) return '-'
+  const d = new Date(n * 1000)
+  const pad = (v, len = 2) => String(v).padStart(len, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`
 }
 </script>
 

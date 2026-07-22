@@ -11,7 +11,7 @@ const pageSize = 100
 
 // ---- 列宽拖动 ----
 const colWidths = reactive({
-  index: 45, frame_index: 45, service_id: 140, method_id: 140,
+  index: 45, frame_index: 45, timestamp: 108, service_id: 140, method_id: 140,
   msg_type: 110, transport: 52, payload_length: 45, status: 55,
 })
 let resizeCol = null, resizeStartX = 0, resizeStartW = 0
@@ -49,6 +49,8 @@ const filtered = computed(() => {
     tokens.every(q => [
       String(m.index),
       String(m.frame_index),
+      String(m.timestamp_iso),
+      String(formatTimestamp(m.timestamp_epoch)),
       String(m.payload_length),
       String(m.service_id),
       String(m.service_name),
@@ -92,6 +94,14 @@ function fmtMsgType(m) {
   return m.message_type || '-'
 }
 
+function formatTimestamp(epoch) {
+  const n = Number(epoch)
+  if (!Number.isFinite(n) || n <= 0) return '-'
+  const d = new Date(n * 1000)
+  const pad = (v, len = 2) => String(v).padStart(len, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`
+}
+
 function statusLabel(s) {
   if (s === 'ok') return '已解析'
   if (s === 'sd') return 'SD'
@@ -132,6 +142,7 @@ function resolvedCount(messages) {
           <tr>
             <th :style="{ width: colWidths.index + 'px' }">序号<span class="col-resize" @mousedown="onResizeStart('index', $event)"></span></th>
             <th :style="{ width: colWidths.frame_index + 'px' }">帧号<span class="col-resize" @mousedown="onResizeStart('frame_index', $event)"></span></th>
+            <th :style="{ width: colWidths.timestamp + 'px' }">Time<span class="col-resize" @mousedown="onResizeStart('timestamp', $event)"></span></th>
             <th :style="{ width: colWidths.service_id + 'px' }">Service ID<span class="col-resize" @mousedown="onResizeStart('service_id', $event)"></span></th>
             <th :style="{ width: colWidths.method_id + 'px' }">Method/Event<span class="col-resize" @mousedown="onResizeStart('method_id', $event)"></span></th>
             <th :style="{ width: colWidths.msg_type + 'px' }">Msg Type<span class="col-resize" @mousedown="onResizeStart('msg_type', $event)"></span></th>
@@ -141,14 +152,15 @@ function resolvedCount(messages) {
           </tr>
         </thead>
         <tbody>
-          <tr v-if="loading"><td colspan="8" class="empty">解析中...</td></tr>
-          <tr v-else-if="!paged.length"><td colspan="8" class="empty">无匹配结果</td></tr>
+          <tr v-if="loading"><td colspan="9" class="empty">解析中...</td></tr>
+          <tr v-else-if="!paged.length"><td colspan="9" class="empty">无匹配结果</td></tr>
           <tr v-for="m in paged" :key="m.index"
               :class="{ selected: m.index === selectedIndex }"
               class="msg-row"
               @click="emit('select', m)">
             <td class="mono">{{ m.index }}</td>
             <td class="mono">{{ m.frame_index }}</td>
+            <td class="mono" :title="m.timestamp_iso || ''">{{ formatTimestamp(m.timestamp_epoch) }}</td>
             <td class="mono">{{ fmtId(m.service_id, m.service_name) }}</td>
             <td class="mono">{{ fmtId(m.method_id, m.method_name) }}</td>
             <td class="mono">{{ fmtMsgType(m) }}</td>

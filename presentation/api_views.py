@@ -44,6 +44,8 @@ def build_message_summaries(
         {
             "index": m["index"],
             "frame_index": m["frame_index"],
+            "timestamp_epoch": m.get("timestamp_epoch", 0.0),
+            "timestamp_iso": m.get("timestamp_iso", ""),
             "service_id": m["header"]["service_id"]["hex"],
             "service_name": _resolve_svc_name(registry, m),
             "method_id": m["header"]["method_id"]["hex"],
@@ -66,6 +68,8 @@ def build_message_detail(messages: list[dict[str, Any]], index: int) -> dict | N
             return {
                 "index": m["index"],
                 "frame_index": m["frame_index"],
+                "timestamp_epoch": m.get("timestamp_epoch", 0.0),
+                "timestamp_iso": m.get("timestamp_iso", ""),
                 "service_id": m["header"]["service_id"]["hex"],
                 "method_id": m["header"]["method_id"]["hex"],
                 "message_type": m["header"]["message_type"]["hex"],

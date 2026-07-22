@@ -1,6 +1,7 @@
 # 开启延迟类型注解，允许类型注解中使用尚未定义的类型，必须放在文件首行
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Literal, TypedDict  # 静态类型注解基础工具
 # 兼容Python3.11前后TypedDict可选字段标记NotRequired
 try:
@@ -59,6 +60,8 @@ class HeaderDict(TypedDict):
 class MessageDict(LayerEndpointsDict):
     index: int
     frame_index: int
+    timestamp_epoch: float
+    timestamp_iso: str
     transport: TransportName
     header: HeaderDict
     payload_hex: str        # 负载十六进制字符串
@@ -187,6 +190,26 @@ def get_layer_endpoints(pkt, transport_layer) -> LayerEndpointsDict:
     }
 
 
+def get_packet_timestamp(pkt) -> dict[str, float | str]:
+    """Extract PCAP frame timestamp from Scapy packet.
+
+    Scapy exposes packet time as ``pkt.time`` in epoch seconds.  Keep both a
+    numeric value for UI sorting/formatting and an ISO UTC string for exported
+    JSON/debugging.
+    """
+    raw_time = getattr(pkt, "time", 0)
+    try:
+        epoch = float(raw_time)
+    except (TypeError, ValueError):
+        epoch = 0.0
+    iso = datetime.fromtimestamp(epoch, timezone.utc).isoformat(
+        timespec="microseconds").replace("+00:00", "Z")
+    return {
+        "timestamp_epoch": epoch,
+        "timestamp_iso": iso,
+    }
+
+
 # 遍历 Scapy 解析出的 SOMEIP 报文对象，
 # 把所有协议头字段名 + 对应数值提取出来，组装成普通字典，方便后面校验、格式化输出。
 # someip_packet: SOMEIP 入参是 Scapy 解析得到的 SOMEIP 层数据包对象。
@@ -274,6 +297,7 @@ def build_message_dict(
         # 1. 报文索引信息
         "index": index,
         "frame_index": frame_index,
+        **get_packet_timestamp(pkt),
         "transport": transport,
         # 2. 解包注入 源IP/目的IP/源端口/目的端口 键值对
         **get_layer_endpoints(pkt, transport_layer),

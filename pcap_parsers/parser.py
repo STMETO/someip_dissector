@@ -231,6 +231,8 @@ def _reassemble_tp(messages: list[dict]) -> tuple[list[dict], list[dict]]:
             reassembled.append({
                 "index": 0,
                 "frame_index": first.get("frame_index", 0),
+                "timestamp_epoch": first.get("timestamp_epoch", 0.0),
+                "timestamp_iso": first.get("timestamp_iso", ""),
                 "transport": first.get("transport", "UDP"),
                 "src_ip": first.get("src_ip", ""),
                 "dst_ip": first.get("dst_ip", ""),

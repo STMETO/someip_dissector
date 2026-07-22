@@ -135,6 +135,8 @@ def get_signal_data(
             points.append({
                 "seq": seq,
                 "frame_index": msg.get("frame_index", 0),
+                "timestamp_epoch": msg.get("timestamp_epoch", 0.0),
+                "timestamp_iso": msg.get("timestamp_iso", ""),
                 "value": value,
             })
         fields_data.append({

@@ -46,6 +46,7 @@ export default {
           ]),
           h('div', { class: 'packet-facts' }, [
             h('span', { class: 'fact' }, msg.message_type_name || msg.message_type || '-'),
+            h('span', { class: 'fact', title: msg.timestamp_iso || '' }, _formatTimestamp(msg.timestamp_epoch)),
             h('span', { class: 'fact' }, msg.transport || '-'),
             h('span', { class: 'fact' }, `${msg.payload_length || 0}B payload`),
             statusChip ? h('span', { class: `fact ${statusChip.cls}` }, statusChip.label) : null,
@@ -157,6 +158,14 @@ function _formatVal(value) {
   if (typeof value === 'boolean') return value ? 'true' : 'false'
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
+}
+
+function _formatTimestamp(epoch) {
+  const n = Number(epoch)
+  if (!Number.isFinite(n) || n <= 0) return '-'
+  const d = new Date(n * 1000)
+  const pad = (v, len = 2) => String(v).padStart(len, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`
 }
 
 function _statusChip(st) {

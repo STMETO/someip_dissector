@@ -95,6 +95,8 @@ def detect_transitions(
             transitions.append({
                 "seq": curr["seq"],
                 "frame_index": curr["frame_index"],
+                "timestamp_epoch": curr.get("timestamp_epoch", 0.0),
+                "timestamp_iso": curr.get("timestamp_iso", ""),
                 "old_value": old_val,
                 "new_value": new_val,
             })
