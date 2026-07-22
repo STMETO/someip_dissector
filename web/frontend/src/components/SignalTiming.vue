@@ -1,9 +1,8 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import SignalSelector from './SignalSelector.vue'
 import SignalChart from './SignalChart.vue'
-import ParseTree from './ParseTree.vue'
-import { fetchSignalMeta, fetchSignalData, fetchMessageDetail } from '../api'
+import { fetchSignalMeta, fetchSignalData } from '../api'
 
 const props = defineProps({
   sessionId: { type: String, required: true },
@@ -14,52 +13,74 @@ const meta = ref([])
 const loading = ref(false)
 const chartData = ref(null)
 const selectInfo = ref(null)
+const errorText = ref('')
 
-// 加载级联选择器数据
+let requestSerial = 0
+
+const chartStats = computed(() => {
+  const fields = chartData.value?.fields || []
+  const pointCount = fields.reduce((sum, f) => sum + (f.points?.length || 0), 0)
+  const transitionCount = fields.reduce((sum, f) => sum + (f.transitions?.length || 0), 0)
+  return {
+    fields: fields.length,
+    points: pointCount,
+    transitions: transitionCount,
+  }
+})
+
 watch(() => props.sessionId, (sid) => {
   if (sid) loadMeta(sid)
 }, { immediate: true })
 
-// 从诊断页跳转时自动生成曲线
-watch(() => props.prefill, (pf) => {
-  if (pf && meta.value.length) {
-    // 找到 service 在 meta 中的位置
-    selectInfo.value = pf
-    onGenerate(pf)
-  }
-})
-
 async function loadMeta(sid) {
+  meta.value = []
+  chartData.value = null
+  selectInfo.value = null
+  errorText.value = ''
   try {
     meta.value = await fetchSignalMeta(sid)
-  } catch { meta.value = [] }
+  } catch {
+    meta.value = []
+    errorText.value = 'Failed to load signal metadata'
+  }
 }
 
 async function onGenerate(params) {
+  const serial = ++requestSerial
   loading.value = true
+  errorText.value = ''
   selectInfo.value = params
-  chartData.value = null
+
   try {
-    chartData.value = await fetchSignalData(
-      props.sessionId, params.service_id, params.event_id, params.field_path
+    const result = await fetchSignalData(
+      props.sessionId,
+      params.service_id,
+      params.event_id,
+      params.field_path,
     )
-  } catch { chartData.value = null }
-  finally { loading.value = false }
+    if (serial === requestSerial) chartData.value = result
+  } catch {
+    if (serial === requestSerial) {
+      chartData.value = null
+      errorText.value = 'Failed to load signal data'
+    }
+  } finally {
+    if (serial === requestSerial) loading.value = false
+  }
 }
 
-async function onPointClick({ frame_index }) {
-  if (!props.sessionId) return
-  // frame_index is not the same as message index; we need to search
-  // Actually the chart data has frame_index from the points
-  // But the message detail API uses message index (not frame_index)
-  // Let's just try to find a message with matching frame_index
-  // We don't have direct access to messages here, so we use what we have
-  // The chart click gives us frame_index but we need the message's index
-  // For now, we can't easily map back; let's skip this handler
+function onClear() {
+  requestSerial += 1
+  loading.value = false
+  chartData.value = null
+  selectInfo.value = null
+  errorText.value = ''
 }
 
-function onMsgSelect(msg) {
-  // Could be used later
+function onPointClick(point) {
+  // 这里先把点击点保留在父组件边界内；后续如需联动报文列表，
+  // 只需要在 App 层增加 frame_index -> message index 的映射。
+  selectInfo.value = { ...(selectInfo.value || {}), active_frame: point.frame_index }
 }
 </script>
 
@@ -71,30 +92,121 @@ function onMsgSelect(msg) {
       :loading="loading"
       :prefill="prefill"
       @generate="onGenerate"
+      @clear="onClear"
     />
-    <div class="signal-workspace">
+
+    <section class="timing-body">
+      <header class="chart-status">
+        <div class="status-main">
+          <span class="status-label">Current Selection</span>
+          <strong>{{ selectInfo?.service_label || 'No service' }}</strong>
+          <span v-if="selectInfo?.event_label" class="status-path">/ {{ selectInfo.event_label }}</span>
+        </div>
+        <div class="status-metrics">
+          <span>{{ chartStats.fields }} fields</span>
+          <span>{{ chartStats.points }} points</span>
+          <span>{{ chartStats.transitions }} transitions</span>
+          <span v-if="selectInfo?.active_frame">Frame {{ selectInfo.active_frame }}</span>
+        </div>
+      </header>
+
       <div class="signal-chart-area">
         <SignalChart
           :data="chartData"
           :selectInfo="selectInfo"
+          :loading="loading"
+          :errorText="errorText"
           @point-click="onPointClick"
         />
       </div>
-    </div>
+    </section>
   </div>
 </template>
 
 <style scoped>
 .signal-timing {
-  flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  min-width: 0;
 }
-.signal-workspace {
-  flex: 1; display: flex; overflow: hidden; min-height: 0; min-width: 0;
+.timing-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, .3);
+  border-radius: 8px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, .2);
+}
+.chart-status {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 9px 12px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #fff;
+}
+.status-main {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  color: #172033;
+}
+.status-label {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.status-main strong,
+.status-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.status-path {
+  color: #475569;
+}
+.status-metrics {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.status-metrics span {
+  padding: 4px 8px;
+  border: 1px solid #dbe3ee;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 700;
 }
 .signal-chart-area {
-  flex: 1; display: flex; min-height: 0; min-width: 0;
-  background: rgba(255,255,255,0.92); border: 1px solid #d8e0ea;
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(31,45,61,0.08);
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+}
+@media (max-width: 1000px) {
+  .chart-status {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .status-metrics {
+    flex-wrap: wrap;
+  }
 }
 </style>
