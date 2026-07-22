@@ -45,6 +45,7 @@ export default {
             h('span', { class: 'packet-kind' }, msg.message_kind || 'SOME/IP'),
           ]),
           h('div', { class: 'packet-facts' }, [
+            h('span', { class: 'fact' }, msg.message_type_name || msg.message_type || '-'),
             h('span', { class: 'fact' }, msg.transport || '-'),
             h('span', { class: 'fact' }, `${msg.payload_length || 0}B payload`),
             statusChip ? h('span', { class: `fact ${statusChip.cls}` }, statusChip.label) : null,

@@ -77,9 +77,10 @@ def build_message_raw_view(msg: dict[str, Any]) -> FieldNode:
     payload_len = len(bytes.fromhex(payload_hex)) if payload_hex else 0
     raw_header_hex = msg.get("raw_header_hex", "")
     children: list[FieldNode] = []
+    sd_kind = _resolve_sd_kind(msg)
 
     # ==== Header ====
-    children.append(_build_header_section(header, raw_header_hex))
+    children.append(_build_header_section(header, raw_header_hex, sd_kind))
 
     # ==== SD（数据来自 parser._parse_sd_payload）====
     sd = msg.get("sd")
@@ -109,7 +110,11 @@ def build_message_raw_view(msg: dict[str, Any]) -> FieldNode:
 # 内部构建函数
 # ---------------------------------------------------------------------------
 
-def _build_header_section(header: dict, raw_header_hex: str) -> FieldNode:
+def _build_header_section(
+    header: dict,
+    raw_header_hex: str,
+    sd_kind: str = "",
+) -> FieldNode:
     """按 SOME/IP 固定布局切 raw_header_hex，给前端结构化展示值。"""
     kids: list[FieldNode] = []
     raw = bytes.fromhex(raw_header_hex) if raw_header_hex else b""
@@ -118,7 +123,7 @@ def _build_header_section(header: dict, raw_header_hex: str) -> FieldNode:
         field_bytes = raw[off:off + size] if len(raw) >= off + size else b""
         hex_str = val.get("hex", "") if isinstance(val, dict) else str(val)
         dec_val = _parse_dec_value(val, hex_str)
-        meaning = _header_field_meaning(key, dec_val)
+        meaning = _header_field_meaning(key, dec_val, sd_kind)
         display: dict[str, Any] = {
             "hex": hex_str,
             "dec": dec_val,
@@ -145,13 +150,45 @@ def _parse_dec_value(val: Any, hex_str: str) -> int:
     return 0
 
 
-def _header_field_meaning(key: str, dec_val: int) -> str:
+def _header_field_meaning(key: str, dec_val: int, sd_kind: str = "") -> str:
     if key == "message_type":
+        if sd_kind:
+            return f"SD {sd_kind}"
         enum = message_type_label(dec_val)
         return "" if enum.startswith("0x") else enum
     if key == "return_code":
         return _RETURN_CODE_LABELS.get(dec_val, "")
     return ""
+
+
+def _resolve_sd_kind(msg: dict[str, Any]) -> str:
+    header = msg.get("header", {})
+    srv_id = header.get("service_id", {}).get("dec", 0)
+    if srv_id != 0xFFFF:
+        return ""
+
+    labels: list[str] = []
+    seen: set[str] = set()
+    for entry in msg.get("sd", {}).get("entries", []):
+        label = _sd_entry_kind_label(entry.get("type", ""))
+        if label and label not in seen:
+            labels.append(label)
+            seen.add(label)
+    return "/".join(labels)
+
+
+def _sd_entry_kind_label(entry_type: str) -> str:
+    if entry_type in {"OfferService", "StopOfferService"}:
+        return "Offer"
+    if entry_type == "SubscribeEventGroup":
+        return "Subscribe"
+    if entry_type in {
+        "SubscribeEventGroupAck",
+        "SubscribeEventgroupAck",
+        "SubscribeEventGroupNack",
+    }:
+        return "SubscribeAck"
+    return entry_type or ""
 
 
 def _build_sd_section(sd: dict, payload_len: int, payload_hex: str) -> FieldNode:

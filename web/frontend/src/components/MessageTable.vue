@@ -12,7 +12,7 @@ const pageSize = 100
 // ---- 列宽拖动 ----
 const colWidths = reactive({
   index: 45, frame_index: 45, service_id: 140, method_id: 140,
-  msg_type: 70, transport: 52, payload_length: 45, status: 55,
+  msg_type: 110, transport: 52, payload_length: 45, status: 55,
 })
 let resizeCol = null, resizeStartX = 0, resizeStartW = 0
 
@@ -54,6 +54,8 @@ const filtered = computed(() => {
       String(m.service_name),
       String(m.method_id),
       String(m.method_name),
+      String(m.message_type),
+      String(m.message_type_name),
       String(m.message_kind),
       String(m.parse_status),
       String(m.transport || ''),
@@ -83,6 +85,11 @@ function clearSearch() {
 function fmtId(hex, name) {
   if (name) return `${hex} (${name})`
   return hex
+}
+
+function fmtMsgType(m) {
+  if (m.message_type_name) return `${m.message_type} ${m.message_type_name}`
+  return m.message_type || '-'
 }
 
 function statusLabel(s) {
@@ -127,7 +134,7 @@ function resolvedCount(messages) {
             <th :style="{ width: colWidths.frame_index + 'px' }">帧号<span class="col-resize" @mousedown="onResizeStart('frame_index', $event)"></span></th>
             <th :style="{ width: colWidths.service_id + 'px' }">Service ID<span class="col-resize" @mousedown="onResizeStart('service_id', $event)"></span></th>
             <th :style="{ width: colWidths.method_id + 'px' }">Method/Event<span class="col-resize" @mousedown="onResizeStart('method_id', $event)"></span></th>
-            <th :style="{ width: colWidths.msg_type + 'px' }">msg_type<span class="col-resize" @mousedown="onResizeStart('msg_type', $event)"></span></th>
+            <th :style="{ width: colWidths.msg_type + 'px' }">Msg Type<span class="col-resize" @mousedown="onResizeStart('msg_type', $event)"></span></th>
             <th :style="{ width: colWidths.transport + 'px' }">协议<span class="col-resize" @mousedown="onResizeStart('transport', $event)"></span></th>
             <th :style="{ width: colWidths.payload_length + 'px' }">长度<span class="col-resize" @mousedown="onResizeStart('payload_length', $event)"></span></th>
             <th :style="{ width: colWidths.status + 'px' }">状态<span class="col-resize" @mousedown="onResizeStart('status', $event)"></span></th>
@@ -144,7 +151,7 @@ function resolvedCount(messages) {
             <td class="mono">{{ m.frame_index }}</td>
             <td class="mono">{{ fmtId(m.service_id, m.service_name) }}</td>
             <td class="mono">{{ fmtId(m.method_id, m.method_name) }}</td>
-            <td class="mono">{{ m.message_kind }}</td>
+            <td class="mono">{{ fmtMsgType(m) }}</td>
             <td class="mono">{{ m.transport || '-' }}</td>
             <td class="mono" style="text-align:right">{{ m.payload_length }}</td>
             <td>

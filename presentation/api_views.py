@@ -49,6 +49,7 @@ def build_message_summaries(
             "method_id": m["header"]["method_id"]["hex"],
             "method_name": _resolve_method_name(registry, m),
             "message_type": m["header"]["message_type"]["hex"],
+            "message_type_name": precise_message_type_name(m),
             "message_kind": m.get("message_kind", "?"),
             "transport": m["transport"],
             "payload_length": m["payload_length"],
@@ -68,6 +69,7 @@ def build_message_detail(messages: list[dict[str, Any]], index: int) -> dict | N
                 "service_id": m["header"]["service_id"]["hex"],
                 "method_id": m["header"]["method_id"]["hex"],
                 "message_type": m["header"]["message_type"]["hex"],
+                "message_type_name": precise_message_type_name(m),
                 "message_kind": m.get("message_kind", "?"),
                 "transport": m["transport"],
                 "payload_length": m["payload_length"],
@@ -99,6 +101,25 @@ def resolve_message_kind(msg: dict[str, Any]) -> str:
             labels.append(label)
             seen.add(label)
     return "/".join(labels) if labels else "SD"
+
+
+def precise_message_type_name(msg: dict[str, Any]) -> str:
+    """Return the most useful message type label for the UI.
+
+    For normal SOME/IP messages this is the header message_type label.  For SD,
+    the header is usually just ``Notification``; the Entry type is what users
+    actually need to scan, so expose it as ``SD Offer`` / ``SD Subscribe``.
+    """
+    msg_type = msg.get("header", {}).get("message_type", {}).get("dec", 0)
+    header_label = message_type_label(msg_type)
+    srv_id = msg.get("header", {}).get("service_id", {}).get("dec", 0)
+    if srv_id != SOMEIP_SD_SERVICE_ID:
+        return header_label
+
+    sd_kind = resolve_message_kind(msg)
+    if sd_kind and sd_kind != "SD":
+        return f"SD {sd_kind}"
+    return f"SD ({header_label})"
 
 
 def _resolve_svc_name(registry: Any, msg: dict[str, Any]) -> str:
