@@ -1,35 +1,40 @@
-"""全链路解析管道 + Web 会话管理。
+"""Web session adapter for the SOME/IP parsing pipeline.
 
-串联 PCAP → ARXML → 反序列化，管理会话生命周期与 API 数据格式化。
+This module should stay thin:
+
+- receive uploaded files through FastAPI types
+- call ``core.pipeline`` for parsing work
+- call ``presentation`` for frontend response shapes
+- keep in-memory session state for subsequent API calls
+
+Parser construction, ARXML compilation, and payload deserialization deliberately
+live outside this module.
 """
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from fastapi import UploadFile
 
-from pcap_parsers.common import EVENT_ID_MASK, message_type_label
-from pcap_parsers.message_view import build_message_raw_view
-from pcap_parsers.parser import SomeIpPcapParser
-from pcap_parsers.strategies import TcpSomeIpStrategy, UdpSomeIpStrategy
-from arxml_parsers import ArxmlParser, TypeFactory, ServiceRegistry
-from arxml_parsers.exporter import export_arxml_report
-from deserialization import DeserializationEngine
+from core.pipeline import run_parse_pipeline, save_pipeline_exports
+from presentation import (
+    build_message_detail,
+    build_message_summaries,
+    render_messages_for_frontend,
+)
 from web.backend.handlers.upload import cleanup_session, validate_and_save
-
-# SOME/IP-SD Service ID
-_SD_SERVICE_ID = 0xFFFF
 
 
 @dataclass
 class _SessionState:
+    """Cached data for one Web upload/parse session."""
+
     session_id: str
     session_dir: Path
     messages: list[dict[str, Any]]
-    registry: Any = None          # ServiceRegistry，供诊断分析用
+    registry: Any = None          # ServiceRegistry, used by diagnostics.
     total_messages: int = 0
     parsed_count: int = 0
     keep_temp: bool = False
@@ -38,12 +43,8 @@ class _SessionState:
 _sessions: dict[str, _SessionState] = {}
 
 
-def _is_resolved_status(status: str) -> bool:
-    return status != "unresolved"
-
-
 # ═══════════════════════════════════════════════════════════════════
-# 解析管道
+# Upload + parse entry
 # ═══════════════════════════════════════════════════════════════════
 
 async def run_upload_and_parse(
@@ -51,71 +52,34 @@ async def run_upload_and_parse(
     arxml_file: UploadFile,
     keep_temp: bool = False,
 ) -> dict[str, Any]:
-    """上传并执行全链路解析。"""
+    """Save uploaded files, run the core pipeline, and cache frontend messages."""
     pcap_path, arxml_path, session_id = await validate_and_save(
         pcap_file, arxml_file, keep_temp)
     session_dir = pcap_path.parent
 
-    # 1. ARXML 编译
-    arxml_parser = ArxmlParser(arxml_path)
-    arxml_parser.parse()
-    type_pool = TypeFactory().build_all(arxml_parser.raw_base_types,
-                                        arxml_parser.raw_types)
-    registry = ServiceRegistry()
-    registry.build(arxml_parser.raw_deployments, arxml_parser.raw_interfaces)
+    # Core parsing result has no Web-only raw_view/message_kind fields.
+    pipeline_result = run_parse_pipeline(pcap_path, arxml_path)
 
-    # 2. PCAP 解析
-    pcap_parser = SomeIpPcapParser([UdpSomeIpStrategy(), TcpSomeIpStrategy()])
-    pcap_result = pcap_parser.parse(pcap_path, Path("/dev/null"))
+    # Presentation rendering is separate so other callers can use the pipeline
+    # without inheriting frontend response details.
+    messages = render_messages_for_frontend(pipeline_result.messages)
 
     if keep_temp:
-        _save_intermediate(session_dir, pcap_result, arxml_parser,
-                           type_pool, registry)
-
-    # 3. 反序列化 + 构建展示数据
-    engine = DeserializationEngine(type_pool, registry)
-    messages: list[dict[str, Any]] = []
-    parsed_count = 0
-
-    for raw_msg in pcap_result["messages"]:
-        msg = dict(raw_msg)
-        srv_id = msg["header"]["service_id"]["dec"]
-
-        if srv_id == _SD_SERVICE_ID:
-            msg["parse_status"] = "sd"
-        else:
-            tree = engine.deserialize_message(msg)
-            if tree is not None:
-                msg["parsed"] = tree.to_dict()
-                msg["parse_status"] = "ok"
-            else:
-                msg["parse_status"] = "unresolved"
-
-        msg["raw_view"] = build_message_raw_view(msg).to_dict()
-        msg["message_kind"] = _resolve_message_kind(msg)
-        if _is_resolved_status(msg["parse_status"]):
-            parsed_count += 1
-        messages.append(msg)
-
-    if keep_temp:
-        export_dir = session_dir / "export"
-        with (export_dir / "deserialized_output.json").open("w", encoding="utf-8") as f:
-            json.dump({
-                "summary": {
-                    "total_messages": len(messages),
-                    "parsed_count": parsed_count,
-                },
-                "messages": messages,
-            }, f, ensure_ascii=False, indent=2)
+        save_pipeline_exports(session_dir, pipeline_result, messages)
 
     state = _SessionState(
-        session_id=session_id, session_dir=session_dir,
-        messages=messages, registry=registry,
+        session_id=session_id,
+        session_dir=session_dir,
+        messages=messages,
+        registry=pipeline_result.registry,
         total_messages=len(messages),
-        parsed_count=parsed_count, keep_temp=keep_temp,
+        parsed_count=pipeline_result.parsed_count,
+        keep_temp=keep_temp,
     )
     _sessions[session_id] = state
 
+    # Uploaded temp files are not needed after parse unless the user explicitly
+    # asks to keep exports/debug artifacts.
     if not keep_temp:
         cleanup_session(session_id)
 
@@ -130,7 +94,7 @@ async def run_upload_and_parse(
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 会话 / 导出
+# Session / export helpers
 # ═══════════════════════════════════════════════════════════════════
 
 def get_session(session_id: str) -> _SessionState | None:
@@ -151,132 +115,12 @@ def get_export_path(session_id: str, filename: str) -> Path | None:
     return p if p.is_file() else None
 
 
-# ═══════════════════════════════════════════════════════════════════
-# API 数据格式化
-# ═══════════════════════════════════════════════════════════════════
-
-def build_message_summaries(messages: list[dict[str, Any]],
-                            registry: Any = None) -> list[dict[str, Any]]:
-    """生成消息列表摘要，附带 Service/Method 可读名称。"""
-    return [
-        {
-            "index": m["index"],
-            "frame_index": m["frame_index"],
-            "service_id": m["header"]["service_id"]["hex"],
-            "service_name": _resolve_svc_name(registry, m),
-            "method_id": m["header"]["method_id"]["hex"],
-            "method_name": _resolve_method_name(registry, m),
-            "message_type": m["header"]["message_type"]["hex"],
-            "message_kind": m.get("message_kind", "?"),
-            "transport": m["transport"],
-            "payload_length": m["payload_length"],
-            "parse_status": m.get("parse_status", "unresolved"),
-        }
-        for m in messages
-    ]
-
-
-def _resolve_svc_name(registry: Any, msg: dict) -> str:
-    try:
-        if registry:
-            sid = msg["header"]["service_id"]["dec"]
-            return registry.lookup_service_name(sid) or ""
-    except Exception:
-        pass
-    return ""
-
-
-def _resolve_method_name(registry: Any, msg: dict) -> str:
-    try:
-        if registry:
-            sid = msg["header"]["service_id"]["dec"]
-            mid = msg["header"]["method_id"]["dec"]
-            # notification 的 event_id 带 0x8000 高位，先去掉再查
-            n = registry.lookup_event_name(sid, mid & EVENT_ID_MASK)
-            if n:
-                return n
-            n = registry.lookup_method_name(sid, mid & EVENT_ID_MASK)
-            if n:
-                return n
-            # 兜底：原值查
-            n = registry.lookup_event_name(sid, mid)
-            if n:
-                return n
-            n = registry.lookup_method_name(sid, mid)
-            if n:
-                return n
-    except Exception:
-        pass
-    return ""
-
-
-def _resolve_message_kind(msg: dict[str, Any]) -> str:
-    header = msg.get("header", {})
-    srv_id = header.get("service_id", {}).get("dec", 0)
-    if srv_id != _SD_SERVICE_ID:
-        return message_type_label(header.get("message_type", {}).get("dec", 0))
-
-    entries = msg.get("sd", {}).get("entries", [])
-    if not entries:
-        return "SD"
-
-    labels: list[str] = []
-    seen: set[str] = set()
-    for entry in entries:
-        label = _sd_entry_kind_label(entry.get("type", ""))
-        if label not in seen:
-            labels.append(label)
-            seen.add(label)
-    return "/".join(labels) if labels else "SD"
-
-
-def _sd_entry_kind_label(entry_type: str) -> str:
-    if entry_type in {"OfferService", "StopOfferService"}:
-        return "Offer"
-    if entry_type == "SubscribeEventGroup":
-        return "Subscribe"
-    if entry_type in {"SubscribeEventGroupAck", "SubscribeEventgroupAck", "SubscribeEventGroupNack"}:
-        return "SubscribeAck"
-    return entry_type or "SD"
-
-
-def build_message_detail(messages: list[dict[str, Any]], index: int) -> dict | None:
-    for m in messages:
-        if m["index"] == index:
-            return {
-                "index": m["index"],
-                "frame_index": m["frame_index"],
-                "service_id": m["header"]["service_id"]["hex"],
-                "method_id": m["header"]["method_id"]["hex"],
-                "message_type": m["header"]["message_type"]["hex"],
-                "message_kind": m.get("message_kind", "?"),
-                "transport": m["transport"],
-                "payload_length": m["payload_length"],
-                "payload_hex": m["payload_hex"],
-                "raw_header_hex": m["raw_header_hex"],
-                "parse_status": m.get("parse_status", "unresolved"),
-                "parsed": m.get("parsed"),
-                "raw_view": m.get("raw_view"),
-            }
-
-
-# ═══════════════════════════════════════════════════════════════════
-# 内部
-# ═══════════════════════════════════════════════════════════════════
-
-def _save_intermediate(session_dir: Path, pcap_result: dict,
-                       arxml_parser: ArxmlParser, type_pool: dict,
-                       registry: ServiceRegistry) -> None:
-    export_dir = session_dir / "export"
-    export_dir.mkdir(exist_ok=True)
-    with (export_dir / "pcap_output.json").open("w", encoding="utf-8") as f:
-        json.dump(pcap_result, f, ensure_ascii=False, indent=2)
-    export_arxml_report(
-        export_dir / "arxml_output.json",
-        raw_base_types=arxml_parser.raw_base_types,
-        raw_types=arxml_parser.raw_types,
-        raw_interfaces=arxml_parser.raw_interfaces,
-        raw_deployments=arxml_parser.raw_deployments,
-        type_pool=type_pool,
-        registry=registry,
-    )
+__all__ = [
+    "_sessions",
+    "build_message_detail",
+    "build_message_summaries",
+    "clear_session",
+    "get_export_path",
+    "get_session",
+    "run_upload_and_parse",
+]

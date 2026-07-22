@@ -67,7 +67,14 @@ someip_dissector/
 │   ├── common.py                       # TypedDict 类型、校验、msg_type 统一映射
 │   ├── strategies.py                   # 策略模式：UDP 单包 / TCP 流重组
 │   ├── parser.py                       # 调度器 + TP 重组 + SD 解析
-│   └── message_view.py                 # 原始数据展示树：msg dict → FieldNode
+│   └── message_view.py                 # 兼容包装：转发到 presentation.message_view
+│
+├── core/                               # 全链路解析编排层（不依赖 Web）
+│   └── pipeline.py                     # ARXML 编译 → PCAP 解析 → Payload 反序列化
+│
+├── presentation/                       # 展示/API 视图模型层
+│   ├── message_view.py                 # 原始数据展示树：msg dict → FieldNode
+│   └── api_views.py                    # Message summary/detail/raw_view/message_kind
 │
 ├── datatypes/                          # 共享数据类型体系
 │   └── types.py                        # DataType 类族（BaseType/BoolType/
@@ -95,7 +102,7 @@ someip_dissector/
 │   ├── backend/
 │   │   ├── app.py                      # FastAPI 入口 + API 路由 + 静态文件
 │   │   └── handlers/
-│   │       ├── analysis.py             # 管道编排 + 会话管理 + API 格式化
+│   │       ├── analysis.py             # 上传/session 适配，调用 core + presentation
 │   │       ├── upload.py               # 异步文件上传 + 校验
 │   │       ├── signal_timing.py        # 信号时序 API
 │   │       └── sd_diagnostic.py        # SD 诊断 API
@@ -132,7 +139,10 @@ someip_dissector/
 ## 阅读顺序
 
 ### pcap_parsers
-`common.py` → `strategies.py` → `parser.py` → `message_view.py`
+`common.py` → `strategies.py` → `parser.py`
+
+### core / presentation
+`core/pipeline.py` → `presentation/message_view.py` → `presentation/api_views.py`
 
 ### arxml_parsers
 `arxml_parser.py` → `type_factory.py` → `service_registry.py`
@@ -233,8 +243,9 @@ python test/main.py
 | **注册表** | `arxml_parsers/service_registry.py` | O(1) 查表 + ID → 名称映射 |
 | **流式反序列化** | `deserialization/` | 返回 `(FieldNode, consumed_bytes)` |
 | **递归组合** | `datatypes/types.py` | Struct/Array 嵌套 DataType |
-| **数据视图分离** | `pcap_parsers/message_view.py` | 展示树与解析逻辑解耦 |
-| **胶水层** | `web/backend/handlers/` | handler 仅编排，核心逻辑在 analysis/ |
+| **管道层** | `core/pipeline.py` | 统一编排 ARXML / PCAP / Payload，独立于 Web |
+| **数据视图分离** | `presentation/` | 展示树和 API DTO 与解析逻辑解耦 |
+| **胶水层** | `web/backend/handlers/` | handler 只处理上传、session、HTTP 适配 |
 
 ---
 
