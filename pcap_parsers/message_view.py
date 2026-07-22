@@ -9,6 +9,17 @@ from __future__ import annotations
 from typing import Any
 
 from deserialization.field_node import FieldNode
+from pcap_parsers.common import message_type_label
+
+# ---- SOME/IP Return Code 枚举 ----
+_RETURN_CODE_LABELS: dict[int, str] = {
+    0x00: "E_OK",
+    0x01: "E_NOT_OK",
+    0x02: "E_WRONG_INTERFACE_VERSION",
+    0x03: "E_WRONG_MESSAGE_TYPE",
+    0x04: "E_WRONG_PROTOCOL_VERSION",
+}
+
 
 # ---- SOME/IP 头部固定布局（字段名, 标签, 偏移, 字节数） ----
 _HEADER_LAYOUT: list[tuple[str, str, int, int]] = [
@@ -76,19 +87,48 @@ def build_message_raw_view(msg: dict[str, Any]) -> FieldNode:
 # ---------------------------------------------------------------------------
 
 def _build_header_section(header: dict, raw_header_hex: str) -> FieldNode:
-    """按 SOME/IP 固定布局切 raw_header_hex，填充偏移/字节数/原始 hex。"""
+    """按 SOME/IP 固定布局切 raw_header_hex，给前端结构化展示值。"""
     kids: list[FieldNode] = []
     raw = bytes.fromhex(raw_header_hex) if raw_header_hex else b""
     for key, label, off, size in _HEADER_LAYOUT:
         val = header.get(key)
         field_bytes = raw[off:off + size] if len(raw) >= off + size else b""
+        hex_str = val.get("hex", "") if isinstance(val, dict) else str(val)
+        dec_val = _parse_dec_value(val, hex_str)
+        meaning = _header_field_meaning(key, dec_val)
+        display: dict[str, Any] = {
+            "hex": hex_str,
+            "dec": dec_val,
+        }
+        if meaning:
+            display["meaning"] = meaning
+
         kids.append(FieldNode.leaf(
             name=label, type_name="hex",
-            value=val.get("hex", "") if isinstance(val, dict) else str(val),
-            offset=off, raw=field_bytes))
+            value=display, offset=off, raw=field_bytes))
     return FieldNode.container(
         name="Header", type_name="SOME/IP Header",
         offset=0, byte_size=16, children=kids)
+
+
+def _parse_dec_value(val: Any, hex_str: str) -> int:
+    if isinstance(val, dict) and isinstance(val.get("dec"), int):
+        return val["dec"]
+    if isinstance(hex_str, str) and hex_str.startswith("0x"):
+        try:
+            return int(hex_str, 16)
+        except ValueError:
+            return 0
+    return 0
+
+
+def _header_field_meaning(key: str, dec_val: int) -> str:
+    if key == "message_type":
+        enum = message_type_label(dec_val)
+        return "" if enum.startswith("0x") else enum
+    if key == "return_code":
+        return _RETURN_CODE_LABELS.get(dec_val, "")
+    return ""
 
 
 def _build_sd_section(sd: dict, payload_len: int) -> FieldNode:
