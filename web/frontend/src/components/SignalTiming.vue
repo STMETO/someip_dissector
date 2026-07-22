@@ -7,6 +7,7 @@ import { fetchSignalMeta, fetchSignalData } from '../api'
 const props = defineProps({
   sessionId: { type: String, required: true },
   prefill: { type: Object, default: null },
+  theme: { type: String, default: 'light' },
 })
 
 const meta = ref([])
@@ -116,6 +117,7 @@ function onPointClick(point) {
           :selectInfo="selectInfo"
           :loading="loading"
           :errorText="errorText"
+          :theme="theme"
           @point-click="onPointClick"
         />
       </div>
@@ -139,10 +141,10 @@ function onPointClick(point) {
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  background: #f8fafc;
-  border: 1px solid rgba(148, 163, 184, .3);
-  border-radius: 8px;
-  box-shadow: 0 18px 40px rgba(0, 0, 0, .2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-panel);
 }
 .chart-status {
   flex-shrink: 0;
@@ -152,18 +154,18 @@ function onPointClick(point) {
   gap: 12px;
   min-height: 44px;
   padding: 9px 12px;
-  border-bottom: 1px solid #e2e8f0;
-  background: #fff;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-raised);
 }
 .status-main {
   min-width: 0;
   display: flex;
   align-items: baseline;
   gap: 7px;
-  color: #172033;
+  color: var(--text-primary);
 }
 .status-label {
-  color: #64748b;
+  color: var(--text-secondary);
   font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
@@ -177,7 +179,7 @@ function onPointClick(point) {
   font-size: 13px;
 }
 .status-path {
-  color: #475569;
+  color: var(--text-secondary);
 }
 .status-metrics {
   flex-shrink: 0;
@@ -187,10 +189,10 @@ function onPointClick(point) {
 }
 .status-metrics span {
   padding: 4px 8px;
-  border: 1px solid #dbe3ee;
-  border-radius: 999px;
-  background: #f8fafc;
-  color: #475569;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
   font-size: 11px;
   font-weight: 700;
 }

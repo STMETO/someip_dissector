@@ -213,7 +213,7 @@ function onDropdownBlur() {
             tabindex="0"
             @blur="onDropdownBlur"
           >
-            <button class="multi-trigger" type="button" @click="fieldDropdownOpen = !fieldDropdownOpen">
+            <button class="multi-trigger" type="button" :aria-expanded="fieldDropdownOpen" @click="fieldDropdownOpen = !fieldDropdownOpen">
               <span :class="{ placeholder: !selectedFields.length }">{{ selectedLabel }}</span>
               <span class="multi-arrow">▾</span>
             </button>
@@ -255,10 +255,10 @@ function onDropdownBlur() {
 .selector-panel {
   flex-shrink: 0;
   padding: 12px 14px;
-  background: #f8fafc;
-  border: 1px solid rgba(148, 163, 184, .3);
-  border-radius: 8px;
-  box-shadow: 0 12px 28px rgba(15, 23, 42, .14);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-panel);
 }
 .selector-main {
   display: flex;
@@ -275,7 +275,7 @@ function onDropdownBlur() {
   gap: 4px;
 }
 .selector-title strong {
-  color: #172033;
+  color: var(--text-primary);
   font-size: 13px;
   line-height: 1.35;
   overflow: hidden;
@@ -283,7 +283,7 @@ function onDropdownBlur() {
   white-space: nowrap;
 }
 .eyebrow {
-  color: #64748b;
+  color: var(--text-secondary);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0;
@@ -304,7 +304,7 @@ function onDropdownBlur() {
   min-width: 0;
 }
 .control > span {
-  color: #64748b;
+  color: var(--text-secondary);
   font-size: 11px;
   font-weight: 700;
 }
@@ -313,10 +313,10 @@ function onDropdownBlur() {
 .field-search {
   height: 34px;
   width: 100%;
-  border: 1px solid #cbd5e1;
-  border-radius: 7px;
-  background: #fff;
-  color: #172033;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text-primary);
   font-size: 12px;
   outline: none;
 }
@@ -326,8 +326,8 @@ function onDropdownBlur() {
 .sel:focus,
 .multi-select.open .multi-trigger,
 .field-search:focus {
-  border-color: #0284c7;
-  box-shadow: 0 0 0 3px rgba(2, 132, 199, .13);
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
 }
 .field-control {
   min-width: 260px;
@@ -352,12 +352,12 @@ function onDropdownBlur() {
   white-space: nowrap;
 }
 .multi-arrow {
-  color: #64748b;
+  color: var(--text-secondary);
   font-size: 10px;
   margin-left: 8px;
 }
 .placeholder {
-  color: #94a3b8;
+  color: var(--text-tertiary);
 }
 .multi-drop {
   position: absolute;
@@ -368,10 +368,10 @@ function onDropdownBlur() {
   max-height: 320px;
   overflow-y: auto;
   padding: 8px;
-  background: #fff;
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
-  box-shadow: 0 18px 38px rgba(15, 23, 42, .18);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-popover);
 }
 .field-search {
   padding: 0 9px;
@@ -385,17 +385,17 @@ function onDropdownBlur() {
 }
 .quick-row button {
   height: 26px;
-  border: 1px solid #dbe3ee;
-  border-radius: 6px;
-  background: #f8fafc;
-  color: #334155;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
   cursor: pointer;
   font-size: 11px;
   font-weight: 700;
 }
 .quick-row button:hover {
-  border-color: #0284c7;
-  color: #0369a1;
+  border-color: var(--accent-border);
+  color: var(--accent);
 }
 .multi-item {
   display: flex;
@@ -403,13 +403,13 @@ function onDropdownBlur() {
   gap: 8px;
   min-height: 28px;
   padding: 4px 6px;
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   font-size: 12px;
   cursor: pointer;
-  font-family: Consolas, 'Courier New', monospace;
+  font-family: var(--font-mono);
 }
 .multi-item:hover {
-  background: #eef6ff;
+  background: var(--surface-hover);
 }
 .multi-item span {
   min-width: 0;
@@ -417,7 +417,7 @@ function onDropdownBlur() {
 }
 .empty-fields {
   padding: 12px 4px;
-  color: #94a3b8;
+  color: var(--text-tertiary);
   text-align: center;
   font-size: 12px;
 }
@@ -425,18 +425,19 @@ function onDropdownBlur() {
   height: 34px;
   min-width: 88px;
   padding: 0 14px;
-  border: 1px solid #0284c7;
-  border-radius: 7px;
-  background: #0284c7;
-  color: #fff;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-control);
+  background: var(--accent);
+  color: var(--accent-contrast);
   cursor: pointer;
   font-size: 12px;
   font-weight: 800;
 }
 .btn-refresh:disabled {
   cursor: not-allowed;
-  border-color: #bae6fd;
-  background: #bae6fd;
+  border-color: var(--border);
+  background: var(--surface-muted);
+  color: var(--text-tertiary);
 }
 @media (max-width: 1100px) {
   .selector-main {

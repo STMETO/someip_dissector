@@ -2,8 +2,13 @@
 import { ref, computed, watch } from 'vue'
 import { uploadFiles, exportUrl } from '../api'
 
-const emit = defineEmits(['parsed', 'update:uploading'])
-const props = defineProps({ loading: Boolean, sessionId: String, hasExport: Boolean })
+const emit = defineEmits(['parsed', 'update:uploading', 'update:theme'])
+const props = defineProps({
+  loading: Boolean,
+  sessionId: String,
+  hasExport: Boolean,
+  theme: { type: String, default: 'light' },
+})
 
 const pcapFile = ref(null)
 const arxmlFile = ref(null)
@@ -71,6 +76,10 @@ function onDrop(e) {
           <a v-if="hasExport" :href="exportUrl(sessionId, 'arxml_output.json')" class="lnk">ARXML JSON</a>
           <a v-if="hasExport" :href="exportUrl(sessionId, 'deserialized_output.json')" class="lnk">反序列化 JSON</a>
         </template>
+        <div class="theme-switch" role="group" aria-label="Color theme">
+          <button type="button" :aria-pressed="theme === 'light'" :class="{ active: theme === 'light' }" @click="emit('update:theme', 'light')">Light</button>
+          <button type="button" :aria-pressed="theme === 'dark'" :class="{ active: theme === 'dark' }" @click="emit('update:theme', 'dark')">Dark</button>
+        </div>
       </div>
     </div>
     <div class="toolbar-hint" v-if="!sessionId">
@@ -82,15 +91,15 @@ function onDrop(e) {
 <style>
 .toolbar {
   flex-shrink: 0;
-  background: rgba(8, 13, 24, .94);
-  border-bottom: 1px solid rgba(148, 163, 184, .24);
-  padding: 13px 18px 11px;
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 16px 10px;
   user-select: none;
-  box-shadow: 0 12px 28px rgba(0, 0, 0, .26);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, .02);
 }
 .toolbar-dragover {
-  background: #10233d;
-  outline: 2px solid #38bdf8;
+  background: var(--accent-soft);
+  outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
 .toolbar-top {
@@ -102,14 +111,14 @@ function onDrop(e) {
 }
 .brand-block { display: flex; flex-direction: column; gap: 2px; }
 .brand {
-  font-size: 19px;
+  font-size: 18px;
   font-weight: 900;
-  color: #f8fafc;
+  color: var(--text-primary);
   letter-spacing: 0;
 }
 .brand-subtitle {
   font-size: 12px;
-  color: #93a4ba;
+  color: var(--text-secondary);
   font-weight: 650;
 }
 .toolbar-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -120,19 +129,19 @@ function onDrop(e) {
   display: inline-flex;
   align-items: center;
   padding: 0 12px;
-  border: 1px solid #334155;
-  border-radius: 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
   cursor: pointer;
   font-size: 13px;
-  color: #cbd5e1;
-  background: #111827;
+  color: var(--text-secondary);
+  background: var(--surface-subtle);
   transition: border-color .15s, background .15s, color .15s;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.pick-btn:hover { border-color: #38bdf8; color: #ffffff; background: #17233a; }
-.pick-btn.active { border-color: #38bdf8; color: #e0f2fe; background: #082f49; }
+.pick-btn:hover { border-color: var(--accent-border); color: var(--text-primary); background: var(--surface-hover); }
+.pick-btn.active { border-color: var(--accent-border); color: var(--accent); background: var(--accent-soft); }
 .pick-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .check-label {
   min-height: 34px;
@@ -140,27 +149,27 @@ function onDrop(e) {
   align-items: center;
   gap: 6px;
   font-size: 13px;
-  color: #cbd5e1;
+  color: var(--text-secondary);
   cursor: pointer;
 }
-.check-label input { width: 14px; height: 14px; accent-color: #38bdf8; }
+.check-label input { width: 14px; height: 14px; accent-color: var(--accent); }
 .btn-go {
   min-height: 34px;
   padding: 0 18px;
-  background: #0284c7;
-  color: #ffffff;
-  border: 1px solid #38bdf8;
-  border-radius: 5px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-control);
   cursor: pointer;
   font-size: 13px;
   font-weight: 900;
-  box-shadow: 0 8px 18px rgba(2, 132, 199, .28);
+  box-shadow: none;
 }
-.btn-go:hover:not(:disabled) { background: #0369a1; }
+.btn-go:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
 .btn-go:disabled {
-  background: #334155;
-  border-color: #475569;
-  color: #94a3b8;
+  background: var(--surface-muted);
+  border-color: var(--border);
+  color: var(--text-tertiary);
   cursor: not-allowed;
   box-shadow: none;
 }
@@ -169,19 +178,45 @@ function onDrop(e) {
   display: inline-flex;
   align-items: center;
   font-size: 12px;
-  color: #bae6fd;
+  color: var(--accent);
   text-decoration: none;
   padding: 0 9px;
-  border-radius: 5px;
-  background: #082f49;
-  border: 1px solid #075985;
+  border-radius: var(--radius-control);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
   font-weight: 800;
 }
-.lnk:hover { background: #0c4a6e; }
+.lnk:hover { background: var(--surface-selected); }
 .toolbar-hint {
   margin-top: 9px;
   font-size: 12px;
-  color: #93a4ba;
+  color: var(--text-tertiary);
+}
+.theme-switch {
+  display: inline-grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+}
+.theme-switch button {
+  min-width: 48px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+}
+.theme-switch button:hover { color: var(--text-primary); }
+.theme-switch button.active {
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  box-shadow: 0 1px 4px rgba(20, 24, 30, .12);
 }
 @media (max-width: 900px) {
   .toolbar-top { justify-content: flex-start; }

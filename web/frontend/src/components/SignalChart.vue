@@ -1,12 +1,36 @@
 <script setup>
 import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import * as echarts from 'echarts'
+import * as echarts from 'echarts/core'
+import { LineChart, ScatterChart } from 'echarts/charts'
+import {
+  DataZoomComponent,
+  GridComponent,
+  LegendComponent,
+  TitleComponent,
+  ToolboxComponent,
+  TooltipComponent,
+} from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+
+// Register only the chart primitives used on this page to keep the workbench bundle lean.
+echarts.use([
+  LineChart,
+  ScatterChart,
+  DataZoomComponent,
+  GridComponent,
+  LegendComponent,
+  TitleComponent,
+  ToolboxComponent,
+  TooltipComponent,
+  CanvasRenderer,
+])
 
 const props = defineProps({
   data: { type: Object, default: null },
   selectInfo: { type: Object, default: null },
   loading: Boolean,
   errorText: { type: String, default: '' },
+  theme: { type: String, default: 'light' },
 })
 const emit = defineEmits(['point-click'])
 
@@ -27,21 +51,22 @@ onUnmounted(() => {
   chart?.dispose()
 })
 
-watch([() => props.data, () => props.selectInfo, () => props.loading, () => props.errorText], () => {
+watch([() => props.data, () => props.selectInfo, () => props.loading, () => props.errorText, () => props.theme], () => {
   nextTick(() => renderChart())
 }, { deep: true })
 
 function renderChart() {
   if (!chartEl.value) return
   if (!chart) chart = echarts.init(chartEl.value)
+  const ui = chartTheme(props.theme)
 
   if (props.loading) {
     chart.clear()
     chart.showLoading('default', {
       text: 'Loading signal data...',
-      color: '#0284c7',
-      textColor: '#64748b',
-      maskColor: 'rgba(248,250,252,.72)',
+      color: ui.accent,
+      textColor: ui.textSecondary,
+      maskColor: ui.loadingMask,
     })
     return
   }
@@ -112,7 +137,7 @@ function renderChart() {
         data: transitions.map(item => [item.seq, item.y, item]),
         symbol: 'diamond',
         symbolSize: 10,
-        itemStyle: { color, borderColor: '#fff', borderWidth: 1.5 },
+        itemStyle: { color, borderColor: ui.surface, borderWidth: 1.5 },
         emphasis: { scale: 1.5 },
         tooltip: { trigger: 'item' },
         encode: { x: 0, y: 1 },
@@ -124,13 +149,13 @@ function renderChart() {
   const seqBounds = valueBounds(allSeqs, 1)
 
   chart.setOption({
-    backgroundColor: '#f8fafc',
+    backgroundColor: ui.surface,
     color: COLORS,
     title: {
       text: title,
       left: 14,
       top: 10,
-      textStyle: { fontSize: 13, color: '#172033', fontWeight: 800 },
+      textStyle: { fontSize: 13, color: ui.textPrimary, fontWeight: 800 },
     },
     legend: {
       data: legendData,
@@ -138,7 +163,7 @@ function renderChart() {
       top: 12,
       right: 90,
       width: '48%',
-      textStyle: { fontSize: 11, color: '#475569' },
+      textStyle: { fontSize: 11, color: ui.textSecondary },
       itemWidth: 14,
       itemHeight: 9,
     },
@@ -146,6 +171,8 @@ function renderChart() {
       right: 12,
       top: 8,
       itemSize: 14,
+      iconStyle: { borderColor: ui.textSecondary },
+      emphasis: { iconStyle: { borderColor: ui.accent } },
       feature: {
         dataZoom: { yAxisIndex: 'none', title: { zoom: 'Zoom', back: 'Back' } },
         restore: { title: 'Restore' },
@@ -154,7 +181,10 @@ function renderChart() {
     },
     tooltip: {
       trigger: 'axis',
-      axisPointer: { type: 'cross', label: { backgroundColor: '#475569' } },
+      backgroundColor: ui.tooltip,
+      borderColor: ui.borderStrong,
+      textStyle: { color: ui.textPrimary },
+      axisPointer: { type: 'cross', label: { backgroundColor: ui.textSecondary } },
       confine: true,
       formatter(params) {
         const items = Array.isArray(params) ? params : [params]
@@ -169,9 +199,10 @@ function renderChart() {
       nameGap: 30,
       min: seqBounds.min,
       max: seqBounds.max,
-      splitLine: { lineStyle: { color: '#e2e8f0' } },
-      axisLabel: { color: '#64748b', fontSize: 10 },
-      nameTextStyle: { color: '#64748b', fontSize: 11, fontWeight: 700 },
+      axisLine: { lineStyle: { color: ui.borderStrong } },
+      splitLine: { lineStyle: { color: ui.grid } },
+      axisLabel: { color: ui.textSecondary, fontSize: 10 },
+      nameTextStyle: { color: ui.textSecondary, fontSize: 11, fontWeight: 700 },
     },
     yAxis: {
       type: 'value',
@@ -180,9 +211,10 @@ function renderChart() {
       min: bounds.min,
       max: bounds.max,
       scale: true,
-      splitLine: { lineStyle: { color: '#e2e8f0' } },
-      axisLabel: { color: '#64748b', fontSize: 10 },
-      nameTextStyle: { color: '#64748b', fontSize: 11, fontWeight: 700 },
+      axisLine: { lineStyle: { color: ui.borderStrong } },
+      splitLine: { lineStyle: { color: ui.grid } },
+      axisLabel: { color: ui.textSecondary, fontSize: 10 },
+      nameTextStyle: { color: ui.textSecondary, fontSize: 11, fontWeight: 700 },
     },
     dataZoom: [
       {
@@ -201,6 +233,11 @@ function renderChart() {
         filterMode: 'none',
         brushSelect: true,
         showDataShadow: true,
+        backgroundColor: ui.surfaceSubtle,
+        borderColor: ui.border,
+        fillerColor: ui.zoomFill,
+        handleStyle: { color: ui.accent, borderColor: ui.accent },
+        textStyle: { color: ui.textSecondary },
       },
     ],
     series,
@@ -215,17 +252,37 @@ function renderChart() {
 }
 
 function renderEmpty(text) {
+  const ui = chartTheme(props.theme)
   chart.hideLoading()
   chart.clear()
   chart.setOption({
-    backgroundColor: '#f8fafc',
+    backgroundColor: ui.surface,
     title: {
       text,
       left: 'center',
       top: 'center',
-      textStyle: { color: '#94a3b8', fontSize: 14, fontWeight: 700 },
+      textStyle: { color: ui.textTertiary, fontSize: 14, fontWeight: 700 },
     },
   }, { notMerge: true })
+}
+
+// ECharts renders into canvas, so it consumes the same root theme through a
+// small explicit palette instead of relying on CSS inheritance.
+function chartTheme(theme) {
+  if (theme === 'dark') {
+    return {
+      surface: '#1b1d1f', surfaceSubtle: '#24272a', tooltip: '#202225',
+      textPrimary: '#f0f2f4', textSecondary: '#adb4bd', textTertiary: '#929aa4',
+      border: '#35393e', borderStrong: '#4b5159', grid: '#303438', accent: '#78a5f5',
+      zoomFill: 'rgba(120, 165, 245, .20)', loadingMask: 'rgba(27, 29, 31, .76)',
+    }
+  }
+  return {
+    surface: '#ffffff', surfaceSubtle: '#f7f8fa', tooltip: '#ffffff',
+    textPrimary: '#171a1f', textSecondary: '#58616d', textTertiary: '#697482',
+    border: '#d4d9e0', borderStrong: '#b8c0ca', grid: '#e5e8ec', accent: '#245dcc',
+    zoomFill: 'rgba(36, 93, 204, .16)', loadingMask: 'rgba(255, 255, 255, .76)',
+  }
 }
 
 function normalizeValue(value) {
@@ -295,7 +352,7 @@ function escapeHtml(value) {
   display: flex;
   min-height: 0;
   width: 100%;
-  background: #f8fafc;
+  background: var(--surface);
 }
 .chart-canvas {
   width: 100%;

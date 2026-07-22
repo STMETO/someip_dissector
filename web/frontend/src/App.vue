@@ -8,6 +8,7 @@ import SubscriptionReport from './components/SubscriptionReport.vue'
 import { fetchMessages, fetchMessageDetail, deleteSession } from './api'
 
 const SPLIT_STORAGE_KEY = 'someip-ui-split-percent'
+const THEME_STORAGE_KEY = 'someip-ui-theme'
 
 const sessionId = ref('')
 const summary = reactive({ total_messages: 0, parsed_count: 0 })
@@ -22,6 +23,13 @@ const progress = ref(0)         // 0-100, 消息加载进度
 const progressText = ref('')
 const currentTab = ref('parse')  // 'parse' | 'signal' | 'subscription'
 const signalPrefill = ref(null) // 从诊断页跳转时预填参数
+const theme = ref(_loadTheme())
+
+// 主题状态集中在页面根节点，避免各业务组件分别维护明暗模式。
+watch(theme, (value) => {
+  document.documentElement.dataset.theme = value
+  window.localStorage.setItem(THEME_STORAGE_KEY, value)
+}, { immediate: true })
 
 // 切换会话时回到解析页
 watch(sessionId, () => { currentTab.value = 'parse'; signalPrefill.value = null })
@@ -95,12 +103,19 @@ function _loadSplitPercent() {
   }
   return 46
 }
+
+function _loadTheme() {
+  const stored = window.localStorage.getItem(THEME_STORAGE_KEY)
+  if (stored === 'light' || stored === 'dark') return stored
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
 </script>
 
 <template>
   <div class="app-shell">
     <UploadBar @parsed="onParsed" :loading="loading || uploading"
                v-model:uploading="uploading"
+               v-model:theme="theme"
                :sessionId="sessionId" :hasExport="hasExport" />
     <!-- 进度条：上传解析阶段（动画） + 消息加载阶段（填充） -->
     <div class="progress-bar" v-if="uploading || loading">
@@ -110,15 +125,24 @@ function _loadSplitPercent() {
         {{ uploading ? '后台解析中，请耐心等待...' : (progressText || '加载中...') }}
       </span>
     </div>
+    <main v-if="!sessionId" class="empty-workspace">
+      <div class="empty-protocol mono">SOME/IP</div>
+      <h1>No active capture</h1>
+      <p>Select a PCAP capture and its ARXML definition to begin.</p>
+      <div class="empty-requirements" aria-label="Required files">
+        <span>PCAP</span>
+        <span>ARXML</span>
+      </div>
+    </main>
     <section class="top-strip" v-if="sessionId">
       <nav class="tab-bar">
-        <button class="tab-btn" :class="{ active: currentTab === 'parse' }" @click="currentTab = 'parse'">
+        <button class="tab-btn" :aria-pressed="currentTab === 'parse'" :class="{ active: currentTab === 'parse' }" @click="currentTab = 'parse'">
           报文解析
         </button>
-        <button class="tab-btn" :class="{ active: currentTab === 'signal' }" @click="currentTab = 'signal'">
+        <button class="tab-btn" :aria-pressed="currentTab === 'signal'" :class="{ active: currentTab === 'signal' }" @click="currentTab = 'signal'">
           信号时序
         </button>
-        <button class="tab-btn" :class="{ active: currentTab === 'subscription' }" @click="currentTab = 'subscription'">
+        <button class="tab-btn" :aria-pressed="currentTab === 'subscription'" :class="{ active: currentTab === 'subscription' }" @click="currentTab = 'subscription'">
           订阅诊断
         </button>
       </nav>
@@ -146,7 +170,7 @@ function _loadSplitPercent() {
     </div>
     <!-- 信号时序视图 -->
     <div class="workspace" v-show="sessionId && currentTab === 'signal'">
-      <SignalTiming :sessionId="sessionId" :prefill="signalPrefill" />
+      <SignalTiming :sessionId="sessionId" :prefill="signalPrefill" :theme="theme" />
     </div>
     <!-- 订阅诊断视图 -->
     <div class="workspace" v-show="sessionId && currentTab === 'subscription'">
@@ -160,18 +184,60 @@ function _loadSplitPercent() {
 html, body, #app {
   height: 100%;
   overflow: hidden;
-  font-family: Inter, 'Segoe UI', 'Microsoft YaHei', sans-serif;
-  background: #101827;
-  color: #172033;
+  font-family: var(--font-sans);
+  background: var(--canvas);
+  color: var(--text-primary);
 }
-button, input { font: inherit; }
-.mono { font-family: Consolas, 'Courier New', monospace; }
+button, input, select { font: inherit; }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .app-shell {
   display: flex;
   flex-direction: column;
   height: 100%;
   min-width: 780px;
-  background: radial-gradient(circle at top left, #1e3a5f 0, #101827 34%, #0a0f1c 100%);
+  background: var(--canvas);
+}
+.empty-workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+.empty-protocol {
+  margin-bottom: 14px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 900;
+}
+.empty-workspace h1 {
+  color: var(--text-primary);
+  font-size: 24px;
+  line-height: 1.2;
+}
+.empty-workspace p {
+  margin-top: 8px;
+  max-width: 46ch;
+  font-size: 13px;
+}
+.empty-requirements {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+}
+.empty-requirements span {
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 800;
 }
 .workspace {
   flex: 1;
@@ -186,12 +252,12 @@ button, input { font: inherit; }
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border: 1px solid rgba(148, 163, 184, .28);
-  border-radius: 7px;
-  box-shadow: 0 18px 40px rgba(0, 0, 0, .25);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-panel);
 }
-.pane-left { min-width: 320px; background: #f8fafc; }
-.pane-right { min-width: 420px; background: #0f172a; }
+.pane-left { min-width: 320px; background: var(--surface); }
+.pane-right { min-width: 420px; background: var(--surface); }
 .splitter {
   width: 12px;
   cursor: col-resize;
@@ -201,35 +267,36 @@ button, input { font: inherit; }
   justify-content: center;
 }
 .splitter-handle {
-  width: 3px;
-  height: 86px;
-  border-radius: 3px;
-  background: #475569;
+  width: 2px;
+  height: 72px;
+  border-radius: 2px;
+  background: var(--border-strong);
+  transition: background .16s ease, width .16s ease;
 }
-.splitter:hover .splitter-handle { background: #60a5fa; }
+.splitter:hover .splitter-handle { width: 3px; background: var(--accent); }
 .progress-bar {
   height: 24px;
-  background: #0f172a;
+  background: var(--surface-muted);
   position: relative;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   overflow: hidden;
-  border-bottom: 1px solid rgba(148, 163, 184, .18);
+  border-bottom: 1px solid var(--border);
 }
-.progress-fill { height: 100%; background: #38bdf8; transition: width .3s ease; }
+.progress-fill { height: 100%; background: var(--accent); transition: width .3s ease; }
 .progress-text {
   position: absolute;
   width: 100%;
   text-align: center;
   font-size: 12px;
-  color: #dbeafe;
+  color: var(--text-primary);
   font-weight: 750;
 }
 .progress-indeterminate {
   height: 100%;
   width: 28%;
-  background: linear-gradient(90deg, #2563eb, #22d3ee);
+  background: var(--accent);
   animation: progress-slide 1.35s ease-in-out infinite;
 }
 @keyframes progress-slide {
@@ -241,32 +308,34 @@ button, input { font: inherit; }
   align-items: flex-end;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 12px 0;
+  padding: 9px 12px 0;
   flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-subtle);
 }
 .tab-bar {
   display: flex;
-  gap: 5px;
+  gap: 2px;
   flex-shrink: 0;
 }
 .tab-btn {
-  min-height: 34px;
+  min-height: 36px;
   padding: 0 16px;
-  border: 1px solid rgba(148, 163, 184, .3);
-  background: rgba(15, 23, 42, .76);
-  border-radius: 6px 6px 0 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  border-radius: 0;
   cursor: pointer;
   font-size: 13px;
-  color: #cbd5e1;
+  color: var(--text-secondary);
   font-weight: 800;
   transition: background .15s, color .15s, border-color .15s;
 }
 .tab-btn.active {
-  background: #f8fafc;
-  color: #0f172a;
-  border-color: #f8fafc;
+  color: var(--accent);
+  border-color: var(--accent);
 }
-.tab-btn:hover:not(.active) { color: #ffffff; border-color: #60a5fa; }
+.tab-btn:hover:not(.active) { color: var(--text-primary); background: var(--surface-hover); }
 .overview-bar {
   display: flex;
   flex-wrap: wrap;
@@ -281,14 +350,14 @@ button, input { font: inherit; }
   align-items: center;
   min-height: 27px;
   padding: 0 9px;
-  background: rgba(15, 23, 42, .72);
-  border: 1px solid rgba(148, 163, 184, .28);
-  border-radius: 5px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
   font-size: 12px;
-  color: #cbd5e1;
+  color: var(--text-secondary);
   font-weight: 750;
 }
-.overview-pill.is-ok { color: #86efac; border-color: #166534; background: rgba(5, 46, 26, .82); }
+.overview-pill.is-ok { color: var(--success); border-color: var(--success-border); background: var(--success-soft); }
 @media (max-width: 900px) {
   .app-shell { min-width: 0; }
   .top-strip { flex-direction: column; align-items: stretch; gap: 8px; }
