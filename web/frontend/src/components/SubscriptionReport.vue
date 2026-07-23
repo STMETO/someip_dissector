@@ -219,14 +219,22 @@ function uniqueFlat(values) {
           </div>
 
           <table class="eg-table" v-if="svc.eventgroups.length">
+            <colgroup>
+              <col class="eg-col-eventgroup">
+              <col class="eg-col-event">
+              <col class="eg-col-clients">
+              <col class="eg-col-ack">
+              <col class="eg-col-notif">
+              <col class="eg-col-issue">
+            </colgroup>
             <thead>
               <tr>
                 <th>EventGroup</th>
                 <th>Event</th>
                 <th>Clients</th>
-                <th>Ack</th>
-                <th>Notif</th>
-                <th>Issue</th>
+                <th class="col-center">Ack</th>
+                <th class="col-num">Notif</th>
+                <th class="col-issue">Issue</th>
               </tr>
             </thead>
             <tbody>
@@ -241,9 +249,9 @@ function uniqueFlat(values) {
                   </span>
                   <span v-else class="muted">none</span>
                 </td>
-                <td><span class="yn" :class="eg.acked ? 'yes' : 'no'">{{ eg.acked ? 'yes' : 'no' }}</span></td>
-                <td class="mono notif-count">{{ eg.notification_count }}</td>
-                <td class="issue-cell">{{ eg.issues.join('; ') || '-' }}</td>
+                <td class="col-center"><span class="yn" :class="eg.acked ? 'yes' : 'no'">{{ eg.acked ? 'yes' : 'no' }}</span></td>
+                <td class="mono col-num notif-count">{{ eg.notification_count }}</td>
+                <td class="col-issue issue-cell">{{ eg.issues.join('; ') || '-' }}</td>
               </tr>
             </tbody>
           </table>
@@ -330,14 +338,24 @@ function uniqueFlat(values) {
 .service-issues { margin-bottom: 10px; }
 .issue-line { color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger-border); border-radius: var(--radius-control); padding: 6px 8px; font-size: 12px; margin-bottom: 5px; }
 .eg-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; background: var(--surface); border: 1px solid var(--border); }
-.eg-table th { text-align: left; padding: 7px 8px; background: var(--surface-muted); color: var(--text-primary); font-weight: 900; }
-.eg-table th:nth-child(1) { width: 24%; }
-.eg-table th:nth-child(2) { width: 24%; }
-.eg-table th:nth-child(3) { width: 23%; }
-.eg-table th:nth-child(4) { width: 8%; }
-.eg-table th:nth-child(5) { width: 7%; }
-.eg-table th:nth-child(6) { width: 14%; }
-.eg-table td { padding: 7px 8px; border-top: 1px solid var(--border); vertical-align: top; color: var(--text-primary); }
+.eg-col-eventgroup { width: 22%; }
+.eg-col-event { width: 19%; }
+.eg-col-clients { width: 19%; }
+.eg-col-ack { width: 7%; }
+.eg-col-notif { width: 7%; }
+.eg-col-issue { width: 26%; }
+.eg-table th {
+  text-align: center; padding: 7px 8px; background: var(--surface-muted);
+  color: var(--text-primary); font-weight: 900; border-right: 1px solid var(--border);
+}
+.eg-table td {
+  padding: 7px 8px; border-top: 1px solid var(--border); border-right: 1px solid var(--border);
+  vertical-align: middle; color: var(--text-primary); text-align: center;
+}
+.eg-table th:last-child, .eg-table td:last-child { border-right: none; }
+.eg-table .col-center { text-align: center; }
+.eg-table .col-num { text-align: center; font-variant-numeric: tabular-nums; }
+.eg-table .col-issue { text-align: center; }
 .eg-error { background: var(--warning-soft); }
 .eg-chip {
   display: inline-flex; max-width: 100%; align-items: center;
@@ -350,7 +368,7 @@ function uniqueFlat(values) {
 .yn { font-weight: 900; }
 .yn.yes { color: var(--success); }
 .yn.no { color: var(--danger); }
-.notif-count { text-align: right; font-weight: 850; }
+.notif-count { font-weight: 850; }
 .issue-cell { color: var(--danger); white-space: normal; word-break: break-word; }
 .empty, .empty-service { color: var(--text-secondary); text-align: center; padding: 36px 0; font-size: 13px; }
 .empty-service { padding: 12px; background: var(--surface); border: 1px dashed var(--border-strong); border-radius: var(--radius-control); }
