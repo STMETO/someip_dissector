@@ -1,11 +1,12 @@
 <script setup>
-import { ref, reactive, onUnmounted, watch } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, watch } from 'vue'
 import UploadBar from './components/UploadBar.vue'
+import SessionSwitcher from './components/SessionSwitcher.vue'
 import MessageTable from './components/MessageTable.vue'
 import ParseTree from './components/ParseTree.vue'
 import SignalTiming from './components/SignalTiming.vue'
 import SubscriptionReport from './components/SubscriptionReport.vue'
-import { fetchMessages, fetchMessageDetail, deleteSession } from './api'
+import { cleanupSessions, fetchMessages, fetchMessageDetail, fetchSessions, deleteSession, persistSession, unpersistSession } from './api'
 
 const SPLIT_STORAGE_KEY = 'someip-ui-split-percent'
 const THEME_STORAGE_KEY = 'someip-ui-theme'
@@ -13,6 +14,11 @@ const THEME_STORAGE_KEY = 'someip-ui-theme'
 const sessionId = ref('')
 const summary = reactive({ total_messages: 0, parsed_count: 0 })
 const hasExport = ref(false)
+const savedSessions = ref([])
+const sessionsLoading = ref(false)
+const pendingDeleteSession = ref(null)
+const actionBusySessionIds = ref(new Set())
+const uploadStartedFromSessionId = ref('')
 
 const messages = ref([])
 const selectedMsg = ref(null)
@@ -24,6 +30,7 @@ const progressText = ref('')
 const currentTab = ref('parse')  // 'parse' | 'signal' | 'subscription'
 const signalPrefill = ref(null) // 从诊断页跳转时预填参数
 const theme = ref(_loadTheme())
+let activationRequestId = 0
 
 // 主题状态集中在页面根节点，避免各业务组件分别维护明暗模式。
 watch(theme, (value) => {
@@ -33,6 +40,19 @@ watch(theme, (value) => {
 
 // 切换会话时回到解析页
 watch(sessionId, () => { currentTab.value = 'parse'; signalPrefill.value = null })
+
+// 解析新文件可能耗时较长。记录上传开始时所在的会话，避免用户
+// 在解析期间切到旧记录后，又被上传完成事件强制切回新记录。
+watch(uploading, (now, prev) => {
+  if (now && !prev) {
+    uploadStartedFromSessionId.value = sessionId.value
+  }
+})
+
+onMounted(() => {
+  loadSessions()
+  window.addEventListener('beforeunload', releaseSessions)
+})
 
 function onJumpToSignal(params) {
   signalPrefill.value = params
@@ -66,9 +86,42 @@ function resetSplit() {
 
 async function onParsed(res) {
   uploading.value = false
-  sessionId.value = res.session_id
-  Object.assign(summary, res.summary)
-  hasExport.value = !!res.has_export
+  await loadSessions()
+  const parsedSession = res.session || {
+    session_id: res.session_id,
+    summary: res.summary,
+    has_export: res.has_export,
+  }
+  const userStayedOnSameSession = sessionId.value === uploadStartedFromSessionId.value
+  if (!sessionId.value || userStayedOnSameSession) {
+    await activateSession(parsedSession)
+  }
+  uploadStartedFromSessionId.value = ''
+}
+
+async function loadSessions() {
+  sessionsLoading.value = true
+  try {
+    savedSessions.value = await fetchSessions()
+  } finally {
+    sessionsLoading.value = false
+  }
+}
+
+async function activateSession(item) {
+  const sid = typeof item === 'string' ? item : item?.session_id
+  if (!sid) return
+  const requestId = ++activationRequestId
+  const meta = typeof item === 'string'
+    ? savedSessions.value.find(s => s.session_id === sid)
+    : item
+
+  sessionId.value = sid
+  Object.assign(summary, meta?.summary || { total_messages: 0, parsed_count: 0 })
+  hasExport.value = meta?.has_export !== false
+  selectedMsg.value = null
+  messages.value = []
+  searchText.value = ''
   loading.value = true
   progress.value = 0
   progressText.value = '加载消息列表中...'
@@ -76,13 +129,102 @@ async function onParsed(res) {
     if (progress.value < 90) { progress.value += 10 }
   }, 200)
   try {
-    messages.value = await fetchMessages(sessionId.value)
+    const nextMessages = await fetchMessages(sid)
+    if (requestId !== activationRequestId) return
+    messages.value = nextMessages
+    if (!meta?.summary) {
+      Object.assign(summary, {
+        total_messages: nextMessages.length,
+        parsed_count: nextMessages.filter(m => m.parse_status !== 'unresolved').length,
+      })
+    }
   } finally {
     clearInterval(timer)
-    progress.value = 100
-    progressText.value = ''
-    loading.value = false
+    if (requestId === activationRequestId) {
+      progress.value = 100
+      progressText.value = ''
+      loading.value = false
+    }
   }
+}
+
+function removeLocalSession(item) {
+  const sid = typeof item === 'string' ? item : item?.session_id
+  if (!sid) return
+  pendingDeleteSession.value = typeof item === 'string'
+    ? savedSessions.value.find(row => row.session_id === sid) || { session_id: sid }
+    : item
+}
+
+function cancelDeleteLocalSession() {
+  pendingDeleteSession.value = null
+}
+
+async function confirmDeleteLocalSession() {
+  const sid = pendingDeleteSession.value?.session_id
+  if (!sid) return
+  pendingDeleteSession.value = null
+  await withSessionBusy(sid, () => deleteSession(sid))
+  savedSessions.value = savedSessions.value.filter(row => row.session_id !== sid)
+  if (sid !== sessionId.value) return
+
+  const next = savedSessions.value[0]
+  if (next) {
+    await activateSession(next)
+  } else {
+    clearActiveSession()
+  }
+}
+
+async function saveSessionRecord(sid) {
+  try {
+    const next = await withSessionBusy(sid, () => persistSession(sid))
+    upsertSessionRow(next)
+    if (sid === sessionId.value) hasExport.value = true
+  } catch (e) {
+    alert('保存记录失败: ' + (e.response?.data?.detail || e.message))
+  }
+}
+
+async function unsaveSessionRecord(sid) {
+  try {
+    const next = await withSessionBusy(sid, () => unpersistSession(sid))
+    upsertSessionRow(next)
+    if (sid === sessionId.value) hasExport.value = false
+  } catch (e) {
+    alert('取消保存失败: ' + (e.response?.data?.detail || e.message))
+  }
+}
+
+function upsertSessionRow(next) {
+  savedSessions.value = [
+    next,
+    ...savedSessions.value.filter(item => item.session_id !== next.session_id),
+  ].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+}
+
+async function withSessionBusy(sid, task) {
+  const busy = new Set(actionBusySessionIds.value)
+  busy.add(sid)
+  actionBusySessionIds.value = busy
+  try {
+    return await task()
+  } finally {
+    const next = new Set(actionBusySessionIds.value)
+    next.delete(sid)
+    actionBusySessionIds.value = next
+  }
+}
+
+function clearActiveSession() {
+  activationRequestId += 1
+  sessionId.value = ''
+  Object.assign(summary, { total_messages: 0, parsed_count: 0 })
+  hasExport.value = false
+  messages.value = []
+  selectedMsg.value = null
+  searchText.value = ''
+  loading.value = false
 }
 
 async function onSelect(msg) {
@@ -92,8 +234,12 @@ async function onSelect(msg) {
 }
 
 onUnmounted(() => {
-  if (sessionId.value) deleteSession(sessionId.value).catch(() => {})
+  window.removeEventListener('beforeunload', releaseSessions)
 })
+
+function releaseSessions() {
+  cleanupSessions().catch(() => {})
+}
 
 function _loadSplitPercent() {
   const raw = window.localStorage.getItem(SPLIT_STORAGE_KEY)
@@ -116,7 +262,21 @@ function _loadTheme() {
     <UploadBar @parsed="onParsed" :loading="loading || uploading"
                v-model:uploading="uploading"
                v-model:theme="theme"
-               :sessionId="sessionId" :hasExport="hasExport" />
+               :sessionId="sessionId" :hasExport="hasExport">
+      <template #session-switcher>
+        <SessionSwitcher
+          :sessions="savedSessions"
+          :activeId="sessionId"
+          :loading="sessionsLoading"
+          :busyIds="[...actionBusySessionIds]"
+          @select="activateSession"
+          @delete="removeLocalSession"
+          @persist="saveSessionRecord"
+          @unpersist="unsaveSessionRecord"
+          @refresh="loadSessions"
+        />
+      </template>
+    </UploadBar>
     <!-- 进度条：上传解析阶段（动画） + 消息加载阶段（填充） -->
     <div class="progress-bar" v-if="uploading || loading">
       <div v-if="uploading" class="progress-indeterminate"></div>
@@ -176,6 +336,30 @@ function _loadTheme() {
     <div class="workspace" v-show="sessionId && currentTab === 'subscription'">
       <SubscriptionReport :sessionId="sessionId" @jump-signal="onJumpToSignal" />
     </div>
+    <Teleport to="body">
+      <div v-if="pendingDeleteSession" class="confirm-layer" role="presentation">
+        <button
+          class="confirm-backdrop"
+          type="button"
+          aria-label="Cancel delete"
+          @click="cancelDeleteLocalSession"
+        ></button>
+        <section class="confirm-dialog" role="alertdialog" aria-modal="true" aria-label="Delete local parse record">
+          <header>
+            <strong>Delete local record?</strong>
+            <span>This removes the parse record from the current UI session.</span>
+          </header>
+          <div class="confirm-target">
+            <span :title="pendingDeleteSession.pcap_name">{{ pendingDeleteSession.pcap_name || 'capture' }}</span>
+            <small class="mono">{{ pendingDeleteSession.session_id }}</small>
+          </div>
+          <footer>
+            <button type="button" class="btn-lite" @click="cancelDeleteLocalSession">Cancel</button>
+            <button type="button" class="btn-danger" @click="confirmDeleteLocalSession">Delete</button>
+          </footer>
+        </section>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -238,6 +422,104 @@ button, input, select { font: inherit; }
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 800;
+}
+.confirm-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 130;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+.confirm-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(10, 12, 16, .36);
+}
+.confirm-dialog {
+  position: relative;
+  width: min(420px, calc(100vw - 32px));
+  overflow: hidden;
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+  box-shadow: var(--shadow-popover);
+}
+.confirm-dialog header {
+  padding: 14px 15px 11px;
+  border-bottom: 1px solid var(--border);
+  background: var(--danger-soft);
+}
+.confirm-dialog header strong {
+  display: block;
+  color: var(--danger);
+  font-size: 15px;
+  font-weight: 900;
+}
+.confirm-dialog header span {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+.confirm-target {
+  display: grid;
+  gap: 4px;
+  padding: 13px 15px;
+}
+.confirm-target span,
+.confirm-target small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.confirm-target span {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 900;
+}
+.confirm-target small {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.confirm-dialog footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 11px 15px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-subtle);
+}
+.confirm-dialog footer button {
+  min-height: 31px;
+  padding: 0 12px;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 850;
+}
+.confirm-dialog .btn-lite {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+}
+.confirm-dialog .btn-lite:hover {
+  border-color: var(--accent-border);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.confirm-dialog .btn-danger {
+  border: 1px solid var(--danger);
+  background: var(--danger);
+  color: var(--accent-contrast);
+}
+.confirm-dialog .btn-danger:hover {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 .workspace {
   flex: 1;

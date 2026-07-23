@@ -12,7 +12,6 @@ const props = defineProps({
 
 const pcapFile = ref(null)
 const arxmlFile = ref(null)
-const keepTemp = ref(false)
 const submitting = ref(false)
 const dragOver = ref(false)
 
@@ -27,7 +26,7 @@ async function submit() {
   if (!canSubmit.value) return
   submitting.value = true
   try {
-    const res = await uploadFiles(pcapFile.value, arxmlFile.value, keepTemp.value)
+    const res = await uploadFiles(pcapFile.value, arxmlFile.value, false)
     emit('parsed', res)
   } catch (e) {
     alert('解析失败: ' + (e.response?.data?.detail || e.message))
@@ -59,6 +58,7 @@ function onDrop(e) {
         <span class="brand-subtitle">PCAP / ARXML protocol analysis workbench</span>
       </div>
       <div class="toolbar-actions">
+        <slot name="session-switcher"></slot>
         <label class="pick-btn" :class="{ active: pcapFile }">
           {{ pcapFile ? pcapFile.name : '选择 PCAP' }}
           <input type="file" accept=".pcap,.pcapng,.cap" @change="handlePcap">
@@ -67,7 +67,6 @@ function onDrop(e) {
           {{ arxmlFile ? arxmlFile.name : '选择 ARXML' }}
           <input type="file" accept=".arxml,.xml" @change="handleArxml">
         </label>
-        <label class="check-label"><input type="checkbox" v-model="keepTemp"> 保留中间JSON</label>
         <button class="btn-go" :disabled="!canSubmit" @click="submit">
           {{ submitting ? '解析中...' : '开始解析' }}
         </button>

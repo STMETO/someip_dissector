@@ -11,6 +11,20 @@ export async function uploadFiles(pcapFile, arxmlFile, keepTemp = false) {
   return data
 }
 
+export async function fetchSessions() {
+  const { data } = await api.get('/sessions')
+  return data.sessions || []
+}
+
+export function cleanupSessions() {
+  const url = '/api/sessions/cleanup'
+  if (navigator.sendBeacon) {
+    navigator.sendBeacon(url, new Blob([], { type: 'application/json' }))
+    return Promise.resolve()
+  }
+  return api.post('/sessions/cleanup')
+}
+
 export async function fetchMessages(sessionId) {
   const { data } = await api.get(`/messages/${sessionId}`)
   return data
@@ -23,6 +37,16 @@ export async function fetchMessageDetail(sessionId, index) {
 
 export async function deleteSession(sessionId) {
   return api.delete(`/session/${sessionId}`)
+}
+
+export async function persistSession(sessionId) {
+  const { data } = await api.post(`/session/${sessionId}/persist`)
+  return data.session
+}
+
+export async function unpersistSession(sessionId) {
+  const { data } = await api.post(`/session/${sessionId}/unpersist`)
+  return data.session
 }
 
 export async function fetchSignalMeta(sessionId) {

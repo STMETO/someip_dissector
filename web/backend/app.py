@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 import sys
@@ -14,32 +13,32 @@ if str(_PROJECT_ROOT) not in sys.path:
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
 from web.backend.handlers.analysis import (
-    _sessions,
+    clear_all_sessions,
     build_message_detail,
     build_message_summaries,
     clear_session,
     get_export_path,
     get_session,
+    list_sessions,
+    persist_session,
     run_upload_and_parse,
+    unpersist_session,
 )
 from web.backend.handlers.sd_diagnostic import get_subscription_report
 from web.backend.handlers.signal_timing import get_signal_data, get_signal_meta
 
 _FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 _HAS_FRONTEND = _FRONTEND_DIST.exists() and (_FRONTEND_DIST / "index.html").exists()
-_SESSIONS_DIR = Path(__file__).resolve().parent.parent / "sessions"
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    yield  # 启动后什么都不做
-    # 关闭：清理所有会话
-    for sid in list(_sessions):
-        clear_session(sid)
-    if _SESSIONS_DIR.exists():
-        shutil.rmtree(_SESSIONS_DIR, ignore_errors=True)
+    clear_all_sessions()
+    yield
+    clear_all_sessions()
 
 
 app = FastAPI(title="SOME/IP Dissector", lifespan=lifespan)
@@ -62,13 +61,42 @@ async def upload(
     return JSONResponse(result)
 
 
+@app.get("/api/sessions")
+async def sessions() -> JSONResponse:
+    rows = await run_in_threadpool(list_sessions)
+    return JSONResponse({"sessions": rows})
+
+
+@app.post("/api/sessions/cleanup")
+async def cleanup_sessions() -> JSONResponse:
+    await run_in_threadpool(clear_all_sessions)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/session/{session_id}/persist")
+async def save_session(session_id: str) -> JSONResponse:
+    summary = await run_in_threadpool(persist_session, session_id)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="会话不存在或已过期")
+    return JSONResponse({"session": summary})
+
+
+@app.post("/api/session/{session_id}/unpersist")
+async def unsave_session(session_id: str) -> JSONResponse:
+    summary = await run_in_threadpool(unpersist_session, session_id)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="会话不存在或已过期")
+    return JSONResponse({"session": summary})
+
+
 @app.get("/api/messages/{session_id}")
 async def get_messages(session_id: str) -> JSONResponse:
     state = get_session(session_id)
     if state is None:
         raise HTTPException(status_code=404, detail="会话不存在或已过期")
     reg = getattr(state, "registry", None)
-    return JSONResponse(build_message_summaries(state.messages, reg))
+    messages = await run_in_threadpool(build_message_summaries, state.messages, reg)
+    return JSONResponse(messages)
 
 
 @app.get("/api/message/{session_id}/{index}")
@@ -76,7 +104,7 @@ async def get_message_detail(session_id: str, index: int) -> JSONResponse:
     state = get_session(session_id)
     if state is None:
         raise HTTPException(status_code=404, detail="会话不存在或已过期")
-    detail = build_message_detail(state.messages, index)
+    detail = await run_in_threadpool(build_message_detail, state.messages, index)
     if detail is None:
         raise HTTPException(status_code=404, detail="消息索引不存在")
     return JSONResponse(detail)
@@ -88,7 +116,7 @@ async def get_message_detail(session_id: str, index: int) -> JSONResponse:
 async def subscription_report(session_id: str) -> JSONResponse:
     """返回 SD 订阅诊断报告。"""
     try:
-        result = get_subscription_report(session_id)
+        result = await run_in_threadpool(get_subscription_report, session_id)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     if result is None:
@@ -102,7 +130,7 @@ async def subscription_report(session_id: str) -> JSONResponse:
 async def signal_meta(session_id: str) -> JSONResponse:
     """返回会话中可绘制信号的三级级联数据（服务→事件→字段路径）。"""
     try:
-        data = get_signal_meta(session_id)
+        data = await run_in_threadpool(get_signal_meta, session_id)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return JSONResponse(data)
@@ -117,7 +145,13 @@ async def signal_data(
 ) -> JSONResponse:
     """返回指定字段的时序数据 + 跳变点列表。"""
     try:
-        result = get_signal_data(session_id, service_id, event_id, field_path)
+        result = await run_in_threadpool(
+            get_signal_data,
+            session_id,
+            service_id,
+            event_id,
+            field_path,
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     if result is None:
@@ -127,7 +161,7 @@ async def signal_data(
 
 @app.delete("/api/session/{session_id}")
 async def delete_session(session_id: str) -> JSONResponse:
-    clear_session(session_id)
+    await run_in_threadpool(clear_session, session_id)
     return JSONResponse({"ok": True})
 
 
