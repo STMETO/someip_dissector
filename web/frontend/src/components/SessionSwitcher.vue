@@ -39,6 +39,18 @@ function shortName(name, fallback) {
   return name || fallback
 }
 
+function formatDuration(ms) {
+  const value = Number(ms)
+  if (!Number.isFinite(value) || value <= 0) return '-'
+  if (value < 1000) return `${Math.round(value)} ms`
+  if (value < 60000) return `${(value / 1000).toFixed(2)} s`
+  return `${(value / 60000).toFixed(1)} min`
+}
+
+function timingValue(item, key) {
+  return formatDuration(item?.timings?.[key])
+}
+
 function isBusy(sessionId) {
   return props.busyIds.includes(sessionId)
 }
@@ -116,6 +128,16 @@ function select(item) {
                   <span class="mono">{{ item.summary?.total_messages || 0 }} msg</span>
                   <span class="mono">{{ item.summary?.parsed_count || 0 }} parsed</span>
                   <span>{{ formatTime(item.created_at) }}</span>
+                </span>
+                <span class="session-timings">
+                  <span>Total {{ timingValue(item, 'upload_total_ms') }}</span>
+                  <span>ARXML {{ timingValue(item, 'arxml_compile_ms') }}</span>
+                  <span>PCAP {{ timingValue(item, 'pcap_parse_ms') }}</span>
+                  <span>Deserialize {{ timingValue(item, 'payload_deserialize_ms') }}</span>
+                  <span>Render {{ timingValue(item, 'frontend_render_ms') }}</span>
+                  <span v-if="item.timings?.last_persist_total_ms">
+                    Save {{ timingValue(item, 'last_persist_total_ms') }}
+                  </span>
                 </span>
                 <span class="session-id mono">{{ item.session_id }}</span>
               </button>
@@ -216,7 +238,7 @@ function select(item) {
 .session-modal {
   position: relative;
   z-index: 1;
-  width: min(780px, calc(100vw - 32px));
+  width: min(980px, calc(100vw - 32px));
   max-height: min(620px, calc(100vh - 40px));
   display: flex;
   flex-direction: column;
@@ -358,7 +380,7 @@ function select(item) {
 .session-select {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(180px, 1.2fr) minmax(190px, .9fr) minmax(120px, .7fr);
+  grid-template-columns: minmax(170px, 1fr) minmax(190px, .9fr) minmax(220px, 1fr) minmax(110px, .55fr);
   align-items: center;
   gap: 10px;
   padding: 10px 12px 10px 14px;
@@ -408,6 +430,25 @@ function select(item) {
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--surface-subtle);
+}
+.session-timings {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.session-timings span {
+  min-height: 20px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border: 1px solid var(--accent-border);
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 800;
 }
 .state-chip.saved {
   color: var(--success);

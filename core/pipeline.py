@@ -14,6 +14,7 @@ part is that Web/session code no longer directly constructs parser objects.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,9 @@ from deserialization import DeserializationEngine
 from pcap_parsers.common import SOMEIP_SD_SERVICE_ID
 from pcap_parsers.parser import SomeIpPcapParser
 from pcap_parsers.strategies import TcpSomeIpStrategy, UdpSomeIpStrategy
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -41,6 +45,7 @@ class ParsePipelineResult:
     registry: ServiceRegistry
     messages: list[dict[str, Any]]
     parsed_count: int
+    timings: dict[str, float]
 
     @property
     def total_messages(self) -> int:
@@ -49,10 +54,32 @@ class ParsePipelineResult:
 
 def run_parse_pipeline(pcap_path: Path, arxml_path: Path) -> ParsePipelineResult:
     """Run ARXML compilation, PCAP parsing, and payload deserialization."""
+    timings: dict[str, float] = {}
+    total_start = time.perf_counter()
+
+    started = time.perf_counter()
     arxml_parser, type_pool, registry = _compile_arxml(arxml_path)
+    timings["arxml_compile_ms"] = _elapsed_ms(started)
+
+    started = time.perf_counter()
     pcap_result = _parse_pcap(pcap_path)
+    timings["pcap_parse_ms"] = _elapsed_ms(started)
+
+    started = time.perf_counter()
     messages, parsed_count = _deserialize_messages(
         pcap_result["messages"], type_pool, registry)
+    timings["payload_deserialize_ms"] = _elapsed_ms(started)
+    timings["pipeline_total_ms"] = _elapsed_ms(total_start)
+
+    logger.info(
+        "Pipeline timings | arxml=%.1fms pcap=%.1fms deserialize=%.1fms total=%.1fms messages=%d parsed=%d",
+        timings["arxml_compile_ms"],
+        timings["pcap_parse_ms"],
+        timings["payload_deserialize_ms"],
+        timings["pipeline_total_ms"],
+        len(messages),
+        parsed_count,
+    )
 
     return ParsePipelineResult(
         pcap_result=pcap_result,
@@ -61,6 +88,7 @@ def run_parse_pipeline(pcap_path: Path, arxml_path: Path) -> ParsePipelineResult
         registry=registry,
         messages=messages,
         parsed_count=parsed_count,
+        timings=timings,
     )
 
 
@@ -68,19 +96,24 @@ def save_pipeline_exports(
     session_dir: Path,
     result: ParsePipelineResult,
     presentation_messages: list[dict[str, Any]] | None = None,
-) -> None:
+) -> dict[str, float]:
     """Save debug/export JSON files for a parse run.
 
     ``presentation_messages`` is optional on purpose: the core pipeline can be
     used without the Web UI, but when Web rendering is available we persist the
     same message shape that the frontend consumes.
     """
+    timings: dict[str, float] = {}
+    total_start = time.perf_counter()
     export_dir = session_dir / "export"
     export_dir.mkdir(exist_ok=True)
 
+    started = time.perf_counter()
     with (export_dir / "pcap_output.json").open("w", encoding="utf-8") as f:
         json.dump(result.pcap_result, f, ensure_ascii=False, indent=2)
+    timings["export_pcap_json_ms"] = _elapsed_ms(started)
 
+    started = time.perf_counter()
     export_arxml_report(
         export_dir / "arxml_output.json",
         raw_base_types=result.arxml_parser.raw_base_types,
@@ -90,7 +123,9 @@ def save_pipeline_exports(
         type_pool=result.type_pool,
         registry=result.registry,
     )
+    timings["export_arxml_json_ms"] = _elapsed_ms(started)
 
+    started = time.perf_counter()
     exported_messages = presentation_messages or result.messages
     with (export_dir / "deserialized_output.json").open("w", encoding="utf-8") as f:
         json.dump({
@@ -100,6 +135,17 @@ def save_pipeline_exports(
             },
             "messages": exported_messages,
         }, f, ensure_ascii=False, indent=2)
+    timings["export_deserialized_json_ms"] = _elapsed_ms(started)
+    timings["export_total_ms"] = _elapsed_ms(total_start)
+
+    logger.info(
+        "Export timings | pcap_json=%.1fms arxml_json=%.1fms deserialized_json=%.1fms total=%.1fms",
+        timings["export_pcap_json_ms"],
+        timings["export_arxml_json_ms"],
+        timings["export_deserialized_json_ms"],
+        timings["export_total_ms"],
+    )
+    return timings
 
 
 def _compile_arxml(arxml_path: Path) -> tuple[ArxmlParser, dict[str, Any], ServiceRegistry]:
@@ -158,3 +204,7 @@ def _deserialize_messages(
 def _is_resolved_status(status: str) -> bool:
     """Statuses other than ``unresolved`` are useful frontend parse hits."""
     return status != "unresolved"
+
+
+def _elapsed_ms(started: float) -> float:
+    return round((time.perf_counter() - started) * 1000, 3)

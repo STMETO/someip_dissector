@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import json
 import shutil
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -30,10 +31,13 @@ from presentation import (
     render_messages_for_frontend,
 )
 from web.backend.handlers.upload import cleanup_session, validate_and_save
+from utils.logger import get_logger
 
 _SESSIONS_ROOT = Path(__file__).resolve().parent.parent.parent / "sessions"
 _SESSION_META = "session.json"
 _DESERIALIZED_EXPORT = "deserialized_output.json"
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -52,6 +56,7 @@ class _SessionState:
     pcap_name: str = ""
     arxml_name: str = ""
     created_at: str = ""
+    timings: dict[str, float] = field(default_factory=dict)
 
 
 _sessions: dict[str, _SessionState] = {}
@@ -77,7 +82,7 @@ async def run_upload_and_parse(
     # Parsing and export serialization are CPU/disk heavy. Run them outside the
     # FastAPI event loop so already parsed sessions can still be browsed while a
     # new upload is being processed.
-    pipeline_result, messages = await run_in_threadpool(
+    pipeline_result, messages, timings = await run_in_threadpool(
         _parse_and_render_session,
         pcap_path,
         arxml_path,
@@ -98,6 +103,7 @@ async def run_upload_and_parse(
         pcap_name=pcap_name,
         arxml_name=arxml_name,
         created_at=_utc_now(),
+        timings=timings,
     )
     _sessions[session_id] = state
     if persistent:
@@ -148,13 +154,25 @@ def persist_session(session_id: str) -> dict[str, Any] | None:
     if state is None:
         return None
 
+    started = time.perf_counter()
     if not state.persistent:
         if state.pipeline_result is not None:
-            save_pipeline_exports(state.session_dir, state.pipeline_result, state.messages)
+            export_timings = save_pipeline_exports(
+                state.session_dir,
+                state.pipeline_result,
+                state.messages,
+            )
+            state.timings.update(export_timings)
         else:
-            _save_messages_export(state)
+            state.timings.update(_save_messages_export(state))
         state.persistent = True
 
+    state.timings["last_persist_total_ms"] = _elapsed_ms(started)
+    logger.info(
+        "Persist timings | session=%s total=%.1fms",
+        session_id,
+        state.timings["last_persist_total_ms"],
+    )
     _save_session_meta(state)
     return session_summary(state)
 
@@ -217,6 +235,7 @@ def session_summary(state: _SessionState) -> dict[str, Any]:
         },
         "has_export": state.persistent,
         "persistent": state.persistent,
+        "timings": state.timings,
     }
 
 
@@ -225,13 +244,27 @@ def _parse_and_render_session(
     arxml_path: Path,
     session_dir: Path,
     persistent: bool,
-) -> tuple[Any, list[dict[str, Any]]]:
+) -> tuple[Any, list[dict[str, Any]], dict[str, float]]:
     """Run the synchronous parse pipeline and build frontend-ready messages."""
+    total_start = time.perf_counter()
     pipeline_result = run_parse_pipeline(pcap_path, arxml_path)
+
+    started = time.perf_counter()
     messages = render_messages_for_frontend(pipeline_result.messages)
+    timings = dict(pipeline_result.timings)
+    timings["frontend_render_ms"] = _elapsed_ms(started)
+
     if persistent:
-        save_pipeline_exports(session_dir, pipeline_result, messages)
-    return pipeline_result, messages
+        timings.update(save_pipeline_exports(session_dir, pipeline_result, messages))
+
+    timings["upload_total_ms"] = _elapsed_ms(total_start)
+    pipeline_result.timings.update(timings)
+    logger.info(
+        "Web render timings | frontend_render=%.1fms upload_total=%.1fms",
+        timings["frontend_render_ms"],
+        timings["upload_total_ms"],
+    )
+    return pipeline_result, messages, timings
 
 
 def _save_session_meta(state: _SessionState) -> None:
@@ -278,12 +311,14 @@ def _load_session_from_disk(session_id: str) -> _SessionState | None:
         pcap_name=meta.get("pcap_name", ""),
         arxml_name=meta.get("arxml_name", ""),
         created_at=meta.get("created_at", ""),
+        timings=meta.get("timings") or {},
     )
     _sessions[session_id] = state
     return state
 
 
-def _save_messages_export(state: _SessionState) -> None:
+def _save_messages_export(state: _SessionState) -> dict[str, float]:
+    started = time.perf_counter()
     export_dir = state.session_dir / "export"
     export_dir.mkdir(exist_ok=True)
     with (export_dir / _DESERIALIZED_EXPORT).open("w", encoding="utf-8") as f:
@@ -294,6 +329,10 @@ def _save_messages_export(state: _SessionState) -> None:
             },
             "messages": state.messages,
         }, f, ensure_ascii=False, indent=2)
+    return {
+        "export_deserialized_json_ms": _elapsed_ms(started),
+        "export_total_ms": _elapsed_ms(started),
+    }
 
 
 def _cleanup_transient_session_dirs() -> None:
@@ -350,11 +389,16 @@ def _legacy_session_meta(session_dir: Path) -> dict[str, Any] | None:
         },
         "has_export": True,
         "persistent": True,
+        "timings": {},
     }
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _elapsed_ms(started: float) -> float:
+    return round((time.perf_counter() - started) * 1000, 3)
 
 
 __all__ = [

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, onMounted, onUnmounted, watch } from 'vue'
+import { computed, ref, reactive, onMounted, onUnmounted, watch } from 'vue'
 import UploadBar from './components/UploadBar.vue'
 import SessionSwitcher from './components/SessionSwitcher.vue'
 import MessageTable from './components/MessageTable.vue'
@@ -14,6 +14,7 @@ const THEME_STORAGE_KEY = 'someip-ui-theme'
 const sessionId = ref('')
 const summary = reactive({ total_messages: 0, parsed_count: 0 })
 const hasExport = ref(false)
+const activeTimings = ref({})
 const savedSessions = ref([])
 const sessionsLoading = ref(false)
 const pendingDeleteSession = ref(null)
@@ -31,6 +32,17 @@ const currentTab = ref('parse')  // 'parse' | 'signal' | 'subscription'
 const signalPrefill = ref(null) // 从诊断页跳转时预填参数
 const theme = ref(_loadTheme())
 let activationRequestId = 0
+
+const timingOverview = computed(() => {
+  const t = activeTimings.value || {}
+  return {
+    total: _formatDuration(t.upload_total_ms || t.pipeline_total_ms),
+    arxml: _formatDuration(t.arxml_compile_ms),
+    pcap: _formatDuration(t.pcap_parse_ms),
+    deserialize: _formatDuration(t.payload_deserialize_ms),
+    render: _formatDuration(t.frontend_render_ms),
+  }
+})
 
 // 主题状态集中在页面根节点，避免各业务组件分别维护明暗模式。
 watch(theme, (value) => {
@@ -119,6 +131,7 @@ async function activateSession(item) {
   sessionId.value = sid
   Object.assign(summary, meta?.summary || { total_messages: 0, parsed_count: 0 })
   hasExport.value = meta?.has_export !== false
+  activeTimings.value = meta?.timings || {}
   selectedMsg.value = null
   messages.value = []
   searchText.value = ''
@@ -180,7 +193,10 @@ async function saveSessionRecord(sid) {
   try {
     const next = await withSessionBusy(sid, () => persistSession(sid))
     upsertSessionRow(next)
-    if (sid === sessionId.value) hasExport.value = true
+    if (sid === sessionId.value) {
+      hasExport.value = true
+      activeTimings.value = next.timings || {}
+    }
   } catch (e) {
     alert('保存记录失败: ' + (e.response?.data?.detail || e.message))
   }
@@ -190,7 +206,10 @@ async function unsaveSessionRecord(sid) {
   try {
     const next = await withSessionBusy(sid, () => unpersistSession(sid))
     upsertSessionRow(next)
-    if (sid === sessionId.value) hasExport.value = false
+    if (sid === sessionId.value) {
+      hasExport.value = false
+      activeTimings.value = next.timings || {}
+    }
   } catch (e) {
     alert('取消保存失败: ' + (e.response?.data?.detail || e.message))
   }
@@ -221,6 +240,7 @@ function clearActiveSession() {
   sessionId.value = ''
   Object.assign(summary, { total_messages: 0, parsed_count: 0 })
   hasExport.value = false
+  activeTimings.value = {}
   messages.value = []
   selectedMsg.value = null
   searchText.value = ''
@@ -254,6 +274,14 @@ function _loadTheme() {
   const stored = window.localStorage.getItem(THEME_STORAGE_KEY)
   if (stored === 'light' || stored === 'dark') return stored
   return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+function _formatDuration(ms) {
+  const value = Number(ms)
+  if (!Number.isFinite(value) || value <= 0) return '-'
+  if (value < 1000) return `${Math.round(value)} ms`
+  if (value < 60000) return `${(value / 1000).toFixed(2)} s`
+  return `${(value / 60000).toFixed(1)} min`
 }
 </script>
 
@@ -311,6 +339,11 @@ function _loadTheme() {
         <span class="overview-pill">报文 {{ summary.total_messages || 0 }}</span>
         <span class="overview-pill is-ok">已解析 {{ summary.parsed_count || 0 }}</span>
         <span class="overview-pill">导出 {{ hasExport ? '开启' : '关闭' }}</span>
+        <span class="overview-pill">总耗时 {{ timingOverview.total }}</span>
+        <span class="overview-pill">ARXML {{ timingOverview.arxml }}</span>
+        <span class="overview-pill">PCAP {{ timingOverview.pcap }}</span>
+        <span class="overview-pill">反序列化 {{ timingOverview.deserialize }}</span>
+        <span class="overview-pill">树形渲染 {{ timingOverview.render }}</span>
       </section>
     </section>
     <!-- 报文解析视图 -->
