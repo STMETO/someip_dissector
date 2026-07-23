@@ -111,6 +111,7 @@ const TreeNode = {
       }
 
       const value = _valueParts(props.node)
+      const showLocation = props.node.show_location !== false
       return h('div', { class: 'tn leaf-row', style: rowStyle.value }, [
         h('div', { class: 'leaf-key' }, props.node.name),
         h('div', { class: 'leaf-body' }, [
@@ -120,11 +121,10 @@ const TreeNode = {
             h('span', { class: 'meaning-text' }, value.meaning),
           ]) : null,
         ]),
-        h('div', { class: 'leaf-meta' }, [
+        showLocation ? h('div', { class: 'leaf-meta' }, [
           h('span', null, ['len ', h('strong', null, `${props.node.byte_size || 0}B`)]),
           h('span', null, ['offset ', h('strong', null, `${props.node.offset || 0}B`)]),
-        ]),
-        props.node.hex ? h('code', { class: 'leaf-raw', title: props.node.hex }, props.node.hex) : null,
+        ]) : null,
       ])
     }
   },
@@ -336,7 +336,7 @@ function _metaLabel(meta) {
 .node-badge-unresolved { color: var(--danger); border-color: var(--danger-border); background: var(--danger-soft); }
 .leaf-row {
   display: grid;
-  grid-template-columns: minmax(145px, 220px) minmax(260px, 1fr) minmax(155px, auto) minmax(80px, 22%);
+  grid-template-columns: minmax(145px, 220px) minmax(260px, 1fr) minmax(155px, auto);
   align-items: center;
   column-gap: 12px;
   min-height: 38px;
@@ -395,27 +395,13 @@ function _metaLabel(meta) {
   white-space: nowrap;
 }
 .leaf-meta strong { color: var(--text-primary); }
-.leaf-raw {
-  justify-self: stretch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-tertiary);
-  background: var(--surface-subtle);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 4px 6px;
-  user-select: text;
-}
 @media (max-width: 1100px) {
   .leaf-row { grid-template-columns: minmax(130px, 180px) minmax(260px, 1fr); row-gap: 6px; }
   .leaf-meta { justify-content: flex-start; }
-  .leaf-raw { grid-column: 2; }
 }
 @media (max-width: 760px) {
   .tree-header { align-items: flex-start; flex-direction: column; }
   .leaf-row { grid-template-columns: 1fr; }
-  .leaf-raw { grid-column: auto; }
   .branch-meta { margin-left: 0; }
   .branch-row { flex-wrap: wrap; }
 }

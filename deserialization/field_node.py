@@ -24,6 +24,8 @@ class FieldNode:
     byte_size: int = 0
     hex: str = ""
     children: list[FieldNode] = field(default_factory=list)
+    # False 表示该节点是展示层补充信息，不对应报文中的连续字节。
+    show_location: bool = True
 
     _is_container: bool = field(default=False, repr=False)
     # 可选元标记："" | "sd" | "unresolved" — 前端据此显示状态徽标
@@ -35,10 +37,12 @@ class FieldNode:
 
     @classmethod
     def leaf(cls, *, name: str, type_name: str, value: Any,
-             offset: int, raw: bytes) -> FieldNode:
+             offset: int, raw: bytes,
+             show_location: bool = True) -> FieldNode:
         """叶子节点：基础类型 / 字符串单一数值。"""
         return cls(name=name, type_name=type_name, value=value,
-                   offset=offset, byte_size=len(raw), hex=raw.hex())
+                   offset=offset, byte_size=len(raw), hex=raw.hex(),
+                   show_location=show_location)
 
     @classmethod
     def container(cls, *, name: str, type_name: str, offset: int,
@@ -68,6 +72,8 @@ class FieldNode:
             d["value"] = self.value
         if self._meta_kind:
             d["meta_kind"] = self._meta_kind
+        if not self.show_location:
+            d["show_location"] = False
 
         if self._is_container:
             d["kind"] = "container"

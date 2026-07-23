@@ -97,7 +97,8 @@ def build_message_raw_view(msg: dict[str, Any]) -> FieldNode:
     # ==== Transport ====
     children.append(FieldNode.leaf(
         name="Transport", type_name="string",
-        value=_fmt_endpoint(msg), offset=0, raw=b""))
+        value=_fmt_endpoint(msg), offset=0, raw=b"",
+        show_location=False))
 
     return FieldNode.container(
         name="Raw PCAP View", type_name="raw_view",
