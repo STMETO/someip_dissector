@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
 const props = defineProps({
   sessionId: { type: String, required: true },
@@ -14,9 +14,19 @@ const selectedEvtIdx = ref(-1)
 const selectedFields = ref([])
 const fieldDropdownOpen = ref(false)
 const fieldSearch = ref('')
+const multiSelectEl = ref(null)
 
 let applyingPrefill = false
 let generateTimer = null
+
+onMounted(() => {
+  document.addEventListener('pointerdown', onDocumentPointerDown)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('pointerdown', onDocumentPointerDown)
+  window.clearTimeout(generateTimer)
+})
 
 const services = computed(() => props.meta || [])
 const selectedService = computed(() => services.value[selectedSvcIdx.value] || null)
@@ -64,16 +74,16 @@ watch(selectedSvcIdx, () => {
 watch(selectedEvtIdx, () => {
   if (applyingPrefill) return
   fieldSearch.value = ''
-  selectedFields.value = fields.value.length ? [fields.value[0]] : []
-  scheduleGenerate()
+  selectedFields.value = []
+  emit('clear')
 })
 
 watch(selectedFields, () => {
   scheduleGenerate()
 }, { deep: true })
 
-// 订阅诊断页跳转时只知道 service/event。这里自动补第一个可绘制字段，
-// 避免父页面需要了解字段级数据结构，保持跳转参数足够轻。
+// 订阅诊断页跳转只预定位 service/event。字段仍由用户明确勾选，
+// 避免切换信号时误以为系统默认字段就是目标分析对象。
 watch([() => props.prefill, services], ([pf]) => {
   if (!pf || !services.value.length) return
   applyPrefill(pf)
@@ -113,12 +123,13 @@ function applyPrefill(pf) {
     .split(',')
     .map(v => v.trim())
     .filter(v => evtFields.includes(v))
-  selectedFields.value = requestedFields.length ? requestedFields : evtFields.slice(0, 1)
+  selectedFields.value = requestedFields
   fieldSearch.value = ''
 
   nextTick(() => {
     applyingPrefill = false
-    scheduleGenerate()
+    if (requestedFields.length) scheduleGenerate()
+    else emit('clear')
   })
 }
 
@@ -128,14 +139,6 @@ function toggleField(field) {
   } else {
     selectedFields.value = [...selectedFields.value, field]
   }
-}
-
-function selectFirst() {
-  selectedFields.value = fields.value.length ? [fields.value[0]] : []
-}
-
-function selectVisibleFields() {
-  selectedFields.value = filteredFields.value.slice(0, 6)
 }
 
 function selectAllFields() {
@@ -160,7 +163,6 @@ function scheduleGenerate() {
 
 function doGenerate() {
   if (!selectionReady.value) return
-  fieldDropdownOpen.value = false
   emit('generate', {
     service_id: selectedService.value.service_id,
     service_label: serviceLabel(selectedService.value),
@@ -171,8 +173,10 @@ function doGenerate() {
   })
 }
 
-function onDropdownBlur() {
-  setTimeout(() => { fieldDropdownOpen.value = false }, 150)
+function onDocumentPointerDown(event) {
+  if (!fieldDropdownOpen.value) return
+  if (multiSelectEl.value?.contains(event.target)) return
+  fieldDropdownOpen.value = false
 }
 </script>
 
@@ -209,15 +213,14 @@ function onDropdownBlur() {
           <span>Fields</span>
           <div
             class="multi-select"
+            ref="multiSelectEl"
             :class="{ open: fieldDropdownOpen, disabled: !fields.length || loading }"
-            tabindex="0"
-            @blur="onDropdownBlur"
           >
-            <button class="multi-trigger" type="button" :aria-expanded="fieldDropdownOpen" @click="fieldDropdownOpen = !fieldDropdownOpen">
+            <button class="multi-trigger" type="button" :aria-expanded="fieldDropdownOpen" @click.stop="fieldDropdownOpen = !fieldDropdownOpen">
               <span :class="{ placeholder: !selectedFields.length }">{{ selectedLabel }}</span>
               <span class="multi-arrow">▾</span>
             </button>
-            <div class="multi-drop" v-show="fieldDropdownOpen">
+            <div class="multi-drop" v-show="fieldDropdownOpen" @click.stop>
               <input
                 class="field-search"
                 v-model="fieldSearch"
@@ -225,8 +228,6 @@ function onDropdownBlur() {
                 @click.stop
               >
               <div class="quick-row">
-                <button type="button" @click.stop="selectFirst">First</button>
-                <button type="button" @click.stop="selectVisibleFields">Top 6</button>
                 <button type="button" @click.stop="selectAllFields">All</button>
                 <button type="button" @click.stop="clearFields">Clear</button>
               </div>
@@ -379,7 +380,7 @@ function onDropdownBlur() {
 }
 .quick-row {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 6px;
   margin-bottom: 7px;
 }

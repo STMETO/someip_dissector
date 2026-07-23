@@ -160,12 +160,20 @@ function renderChart() {
     legend: {
       data: legendData,
       type: 'scroll',
-      top: 12,
-      right: 90,
-      width: '48%',
+      top: 42,
+      left: 'center',
+      width: '64%',
       textStyle: { fontSize: 11, color: ui.textSecondary },
       itemWidth: 14,
       itemHeight: 9,
+      itemGap: 12,
+      formatter: legendLabel,
+      tooltip: {
+        show: true,
+        formatter(params) {
+          return escapeHtml(params.name)
+        },
+      },
     },
     toolbox: {
       right: 12,
@@ -191,7 +199,7 @@ function renderChart() {
         return items.map(formatTooltipItem).filter(Boolean).join('<br/><br/>')
       },
     },
-    grid: { left: 58, right: 24, top: 68, bottom: 58, containLabel: true },
+    grid: { left: 58, right: 24, top: 92, bottom: 58, containLabel: true },
     xAxis: {
       type: 'value',
       name: 'Seq',
@@ -299,6 +307,16 @@ function valueBounds(values, minPad = 0) {
   const range = max - min
   const pad = Math.max(minPad, range > 0 ? range * 0.08 : Math.max(Math.abs(min) * 0.08, 1))
   return { min: min - pad, max: max + pad }
+}
+
+function legendLabel(name) {
+  const raw = String(name || '')
+  const isTransition = raw.endsWith(' transitions')
+  const base = isTransition ? raw.slice(0, -12) : raw
+  const parts = base.split(/[./\\:>\s]+/).filter(Boolean)
+  const last = parts.length ? parts[parts.length - 1] : base
+  const compact = last.length > 22 ? `${last.slice(0, 19)}...` : last
+  return isTransition ? `${compact} trans` : compact
 }
 
 function formatTooltipItem(item) {

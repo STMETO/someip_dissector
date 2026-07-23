@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, reactive, onUnmounted } from 'vue'
+import { ref, computed, watch, reactive, onUnmounted, nextTick } from 'vue'
 
 const props = defineProps({
   messages: Array, loading: Boolean, selectedIndex: Number, searchText: String,
@@ -7,6 +7,7 @@ const props = defineProps({
 const emit = defineEmits(['select', 'update:searchText'])
 
 const currentPage = ref(1)
+const tableWrap = ref(null)
 const pageSize = 100
 
 // ---- 列宽拖动 ----
@@ -74,6 +75,11 @@ const totalPages = computed(() => Math.max(1, Math.ceil(filtered.value.length / 
 
 watch(() => props.messages, () => { currentPage.value = 1 })
 watch(filtered, () => { currentPage.value = 1 })
+watch(currentPage, () => {
+  nextTick(() => {
+    tableWrap.value?.scrollTo({ top: 0, behavior: 'auto' })
+  })
+})
 
 function goPage(v) {
   const n = parseInt(v, 10)
@@ -136,7 +142,7 @@ function resolvedCount(messages) {
         <button v-if="searchText" class="search-clear" @click="clearSearch">清空</button>
       </div>
     </div>
-    <div class="msg-table-wrap">
+    <div class="msg-table-wrap" ref="tableWrap">
       <table class="msg-table">
         <thead>
           <tr>
