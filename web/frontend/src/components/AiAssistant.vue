@@ -1,6 +1,13 @@
 <script setup>
-import { nextTick, onMounted, ref, watch } from 'vue'
+import DOMPurify from 'dompurify'
+import { marked } from 'marked'
+import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { askAssistant, configureAssistant, fetchAssistantStatus } from '../api'
+
+const DEFAULT_DRAWER_WIDTH = 440
+const MIN_DRAWER_WIDTH = 360
+const MAX_DRAWER_WIDTH = 960
+const MOBILE_BREAKPOINT = 600
 
 const props = defineProps({
   open: Boolean,
@@ -23,13 +30,22 @@ const draft = ref('')
 const sending = ref(false)
 const chatError = ref('')
 const messageList = ref(null)
+const drawerWidth = ref(DEFAULT_DRAWER_WIDTH)
+const resizing = ref(false)
+let resizeStartX = 0
+let resizeStartWidth = DEFAULT_DRAWER_WIDTH
 
-watch(() => props.open, (isOpen) => {
-  if (isOpen) refreshStatus()
+watch(() => props.open, async (isOpen) => {
+  if (isOpen) {
+    refreshStatus()
+    await nextTick()
+    clampDrawerWidth()
+  } else {
+    stopResize()
+  }
 })
 
-// A conversation is scoped to one parsed capture. Switching records starts a
-// fresh context so references such as "this service" cannot cross sessions.
+// 每段对话只绑定一份解析记录；切换记录时清空上下文，防止“这个服务”等指代串到其他会话。
 watch(() => props.sessionId, () => {
   messages.value = []
   conversationId.value = null
@@ -37,7 +53,15 @@ watch(() => props.sessionId, () => {
   chatError.value = ''
 })
 
-onMounted(refreshStatus)
+onMounted(() => {
+  refreshStatus()
+  window.addEventListener('resize', clampDrawerWidth)
+})
+
+onUnmounted(() => {
+  stopResize()
+  window.removeEventListener('resize', clampDrawerWidth)
+})
 
 async function refreshStatus() {
   statusLoading.value = true
@@ -93,6 +117,7 @@ async function submitQuestion(value = draft.value) {
     messages.value.push({
       role: 'assistant',
       content: result.answer,
+      renderedContent: renderMarkdown(result.answer),
       tools: result.tools || [],
       model: result.model,
     })
@@ -121,6 +146,69 @@ function closePanel() {
   emit('update:open', false)
 }
 
+function renderMarkdown(content) {
+  const html = marked.parse(String(content || ''), {
+    async: false,
+    breaks: true,
+    gfm: true,
+  })
+  return DOMPurify.sanitize(html, {
+    USE_PROFILES: { html: true },
+    FORBID_TAGS: [
+      'style', 'iframe', 'img', 'video', 'audio', 'object', 'embed',
+      'form', 'input', 'textarea', 'button', 'select', 'option',
+    ],
+    FORBID_ATTR: ['style'],
+  })
+}
+
+function startResize(event) {
+  if (window.innerWidth <= MOBILE_BREAKPOINT || (event.button ?? 0) !== 0) return
+  event.preventDefault()
+  resizing.value = true
+  resizeStartX = event.clientX
+  resizeStartWidth = drawerWidth.value
+  document.body.classList.add('assistant-is-resizing')
+  window.addEventListener('pointermove', resizeDrawer)
+  window.addEventListener('pointerup', stopResize)
+  window.addEventListener('pointercancel', stopResize)
+}
+
+function resizeDrawer(event) {
+  if (!resizing.value) return
+  setDrawerWidth(resizeStartWidth + resizeStartX - event.clientX)
+}
+
+function stopResize() {
+  if (!resizing.value) return
+  resizing.value = false
+  document.body.classList.remove('assistant-is-resizing')
+  window.removeEventListener('pointermove', resizeDrawer)
+  window.removeEventListener('pointerup', stopResize)
+  window.removeEventListener('pointercancel', stopResize)
+}
+
+function resizeWithKeyboard(event) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  if (event.key === 'ArrowLeft') setDrawerWidth(drawerWidth.value + 24)
+  if (event.key === 'ArrowRight') setDrawerWidth(drawerWidth.value - 24)
+  if (event.key === 'Home') setDrawerWidth(MIN_DRAWER_WIDTH)
+  if (event.key === 'End') setDrawerWidth(maxDrawerWidth())
+}
+
+function setDrawerWidth(width) {
+  drawerWidth.value = Math.round(Math.min(maxDrawerWidth(), Math.max(MIN_DRAWER_WIDTH, width)))
+}
+
+function clampDrawerWidth() {
+  if (window.innerWidth > MOBILE_BREAKPOINT) setDrawerWidth(drawerWidth.value)
+}
+
+function maxDrawerWidth() {
+  return Math.max(MIN_DRAWER_WIDTH, Math.min(MAX_DRAWER_WIDTH, window.innerWidth - 72))
+}
+
 function apiError(error, fallback) {
   return error?.response?.data?.detail || error?.message || fallback
 }
@@ -129,7 +217,26 @@ function apiError(error, fallback) {
 <template>
   <Teleport to="body">
     <Transition name="assistant-panel">
-      <aside v-if="open" class="assistant-drawer" aria-label="AI 分析助手">
+      <aside
+        v-if="open"
+        class="assistant-drawer"
+        :class="{ 'is-resizing': resizing }"
+        :style="{ width: `${drawerWidth}px` }"
+        aria-label="AI 分析助手"
+      >
+        <button
+          type="button"
+          class="assistant-resize-handle"
+          role="separator"
+          aria-label="调整 AI 对话框宽度"
+          aria-orientation="vertical"
+          :aria-valuemin="MIN_DRAWER_WIDTH"
+          :aria-valuemax="maxDrawerWidth()"
+          :aria-valuenow="drawerWidth"
+          title="向左拖动调整宽度"
+          @pointerdown="startResize"
+          @keydown="resizeWithKeyboard"
+        ></button>
         <header class="assistant-header">
           <div>
             <h2>AI 分析助手</h2>
@@ -210,7 +317,7 @@ function apiError(error, fallback) {
 
           <section v-else-if="messages.length === 0" class="assistant-empty assistant-starters">
             <strong>询问当前抓包</strong>
-            <p>当前工具支持查询 Offer、Subscribe、Ack 和 Notification 状态。</p>
+            <p>支持服务查找、Offer 与订阅时间线、报文筛选和单报文解析。</p>
             <button type="button" @click="submitQuestion('总结当前抓包中的服务 Offer 和订阅情况')">
               总结 Offer 和订阅情况
             </button>
@@ -226,7 +333,12 @@ function apiError(error, fallback) {
             :class="`is-${message.role}`"
           >
             <span class="message-role">{{ message.role === 'user' ? '我' : 'AI 助手' }}</span>
-            <p>{{ message.content }}</p>
+            <div
+              v-if="message.role === 'assistant'"
+              class="message-content markdown-body"
+              v-html="message.renderedContent"
+            ></div>
+            <div v-else class="message-content user-content">{{ message.content }}</div>
             <footer v-if="message.tools?.length">
               调用工具：{{ message.tools.map(tool => tool.name).join(', ') }}
             </footer>
@@ -274,6 +386,41 @@ function apiError(error, fallback) {
   background: var(--surface);
   color: var(--text-primary);
   box-shadow: -18px 0 44px rgba(30, 38, 50, .18);
+}
+.assistant-drawer.is-resizing { transition: none; }
+.assistant-resize-handle {
+  position: absolute;
+  inset: 0 auto 0 -6px;
+  z-index: 2;
+  width: 12px;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+}
+.assistant-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 5px;
+  width: 2px;
+  height: 42px;
+  border-radius: 1px;
+  background: var(--border-strong);
+  transform: translateY(-50%);
+  transition: height .16s ease, background-color .16s ease;
+}
+.assistant-resize-handle:hover::after,
+.assistant-resize-handle:focus-visible::after,
+.assistant-drawer.is-resizing .assistant-resize-handle::after {
+  height: 64px;
+  background: var(--accent);
+}
+body.assistant-is-resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 :root[data-theme="dark"] .assistant-drawer {
   box-shadow: -18px 0 48px rgba(0, 0, 0, .38);
@@ -511,6 +658,10 @@ function apiError(error, fallback) {
   max-width: 92%;
   margin-bottom: 13px;
 }
+.chat-message.is-assistant {
+  width: 100%;
+  max-width: 100%;
+}
 .chat-message.is-user { margin-left: auto; }
 .message-role {
   display: block;
@@ -521,7 +672,7 @@ function apiError(error, fallback) {
   text-transform: uppercase;
 }
 .chat-message.is-user .message-role { text-align: right; }
-.chat-message p {
+.message-content {
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-panel);
@@ -529,12 +680,97 @@ function apiError(error, fallback) {
   color: var(--text-primary);
   font-size: 12px;
   line-height: 1.58;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.chat-message.is-user p {
+.chat-message.is-user .message-content {
   border-color: var(--accent-border);
   background: var(--accent-soft);
+}
+.user-content { white-space: pre-wrap; }
+.markdown-body > :first-child { margin-top: 0; }
+.markdown-body > :last-child { margin-bottom: 0; }
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body blockquote,
+.markdown-body pre,
+.markdown-body table {
+  margin: 0 0 10px;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  margin: 15px 0 7px;
+  color: var(--text-primary);
+  line-height: 1.35;
+  letter-spacing: 0;
+}
+.markdown-body h1 { font-size: 16px; }
+.markdown-body h2 { font-size: 14px; }
+.markdown-body h3,
+.markdown-body h4 { font-size: 13px; }
+.markdown-body ul,
+.markdown-body ol { padding-left: 20px; }
+.markdown-body li + li { margin-top: 3px; }
+.markdown-body strong { font-weight: 900; }
+.markdown-body a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.markdown-body blockquote {
+  padding: 7px 10px;
+  border-left: 3px solid var(--accent-border);
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+}
+.markdown-body code {
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--surface-subtle);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.markdown-body pre {
+  max-width: 100%;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-subtle);
+}
+.markdown-body pre code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.markdown-body table {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  border-spacing: 0;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.markdown-body th,
+.markdown-body td {
+  min-width: 86px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.markdown-body th {
+  background: var(--surface-subtle);
+  font-weight: 850;
+}
+.markdown-body hr {
+  height: 1px;
+  margin: 12px 0;
+  border: 0;
+  background: var(--border);
 }
 .chat-message footer {
   margin: 5px 2px 0;
@@ -634,7 +870,8 @@ function apiError(error, fallback) {
   border: 0;
 }
 @media (max-width: 600px) {
-  .assistant-drawer { width: 100vw; }
+  .assistant-drawer { width: 100vw !important; }
+  .assistant-resize-handle { display: none; }
   .assistant-header { padding-left: 12px; }
   .assistant-messages { padding: 12px; }
 }

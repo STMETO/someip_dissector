@@ -26,7 +26,7 @@ pip install fastapi uvicorn python-multipart aiofiles
 
 ### 2. 前端环境（Node.js + npm）
 
-前端基于 **Vue 3 + Vite + Element Plus + ECharts**，需要 Node.js ≥ 18。
+前端基于 **Vue 3 + Vite + ECharts**，需要 Node.js ≥ 18。
 
 ```bash
 # 检查 Node.js 版本
@@ -42,9 +42,10 @@ npm run build
 | 前端依赖 | 用途 |
 |----------|------|
 | `vue` (^3.3) | 渐进式 UI 框架（Composition API + SFC） |
-| `element-plus` (^2.3) | UI 组件库 |
 | `axios` (^1.6) | HTTP 客户端 |
 | `echarts` | 信号时序多曲线图表 |
+| `marked` | 将模型回答解析为 GFM Markdown |
+| `dompurify` | 清理 Markdown 生成的 HTML，阻止不安全标签和属性 |
 | `vite` (^4.0) | 构建工具 (HMR + Rollup) |
 | `@vitejs/plugin-vue` (^4.0) | Vite Vue 3 SFC 编译 |
 
@@ -70,11 +71,20 @@ someip_dissector/
 │   └── message_view.py                 # 兼容包装：转发到 presentation.message_view
 │
 ├── assistant/                          # AI 问答编排层（不依赖具体 Web 页面）
+│   ├── __init__.py                     # 对外导出配置、问答和会话清理接口
 │   ├── config.py                       # 模型地址、模型名称和进程内 API Key
 │   ├── provider.py                     # OpenAI-compatible 请求客户端
-│   ├── service.py                      # 对话上下文和 Tool Calling 循环
+│   ├── schemas.py                      # 配置和对话请求的 Pydantic 模型
+│   ├── service.py                      # 对话上下文、系统提示词和 Tool Calling 循环
+│   ├── tool_support.py                 # Tool 共用参数校验、会话读取和证据格式化
 │   └── tools/                          # 一个文件实现一个只读查询 Tool
-│       └── subscription_status.py      # Offer / Subscribe / Ack / Notification 查询
+│       ├── __init__.py                 # Tool Schema 注册表和服务端调用白名单
+│       ├── subscription_status.py      # Offer / Subscribe / Ack / Notification 总览
+│       ├── find_service.py             # 按 ID 或 ARXML 名称查找服务
+│       ├── offer_timeline.py           # Offer / StopOffer 生命周期时间线
+│       ├── subscription_timeline.py    # Subscribe / Ack / Nack / Notification 时间线
+│       ├── search_messages.py          # 按协议字段、IP 和时间范围检索报文
+│       └── message_detail.py           # 查询单条报文 Header、SD 和 Payload 解析树
 │
 ├── core/                               # 全链路解析编排层（不依赖 Web）
 │   └── pipeline.py                     # ARXML 编译 → PCAP 解析 → Payload 反序列化
@@ -160,6 +170,9 @@ someip_dissector/
 ### analysis
 `signal_utils.py` → `sd_diagnostic.py`
 
+### assistant
+`config.py` → `provider.py` → `service.py` → `tools/__init__.py` → 各 Tool 文件
+
 ### web
 `handlers/analysis.py` → `app.py` → 前端 `App.vue` → 各组件
 
@@ -212,9 +225,17 @@ python run.py web
 
 ### AI 分析助手（MVP）
 
-页面右上角的 `AI 助手` 会打开当前解析会话的侧边问答面板。第一版提供
-`get_subscription_status` Tool，可查询 SOME/IP-SD 的 Offer、Subscribe、Ack 和
-Notification 诊断结果。
+页面右上角的 `AI 助手` 会打开当前解析会话的侧边问答面板。面板左边缘可以
+拖动调节宽度，回答按经过安全清理的 GFM Markdown 渲染。当前提供六个只读 Tool：
+
+| Tool | 作用 |
+|------|------|
+| `get_subscription_status` | 汇总 Offer、Subscribe、Ack、Nack 和 Notification 诊断 |
+| `find_service` | 按十六进制 ID、十进制 ID 或 ARXML 名称查找服务 |
+| `get_offer_timeline` | 查询 Offer、StopOffer、Instance、TTL 和发布 ECU 时间线 |
+| `get_subscription_timeline` | 查询 Subscribe、Ack、Nack 和关联 Notification 时间线 |
+| `search_messages` | 按服务、方法、报文类型、IP、SD Entry 和时间范围过滤报文 |
+| `get_message_detail` | 读取指定报文的 Header、SD、Payload 和反序列化树 |
 
 页面默认填充 DeepSeek 官方 OpenAI-compatible 地址和 `deepseek-v4-flash` 模型。
 不同服务商签发的 API Key 不通用，切换服务商时必须同时检查 API Key、API 地址
@@ -232,6 +253,50 @@ python run.py web
 兼容接口需要实现 `POST {AI_API_BASE}/chat/completions` 并支持 Tool Calling。
 远程部署时应使用 HTTPS，并在后续加入用户认证和独立密钥存储。后续功能见
 [`TODO.md`](TODO.md)。
+
+#### Assistant 目录结构
+
+```text
+assistant/
+├── __init__.py
+├── config.py
+├── provider.py
+├── schemas.py
+├── service.py
+├── tool_support.py
+└── tools/
+    ├── __init__.py
+    ├── subscription_status.py
+    ├── find_service.py
+    ├── offer_timeline.py
+    ├── subscription_timeline.py
+    ├── search_messages.py
+    └── message_detail.py
+```
+
+| 文件或目录 | 职责 |
+|------------|------|
+| `assistant/__init__.py` | 稳定的包入口，供 FastAPI 导入助手服务，不暴露内部实现细节 |
+| `assistant/config.py` | 合并页面运行时配置、环境变量和默认值；API Key 仅驻留当前进程内存 |
+| `assistant/provider.py` | 构造 OpenAI-compatible Chat Completions 请求并统一转换连接错误 |
+| `assistant/schemas.py` | 校验模型配置和对话请求长度、类型等 API 边界 |
+| `assistant/service.py` | 绑定解析会话与对话历史，注入系统提示词，循环处理模型 Tool Calling |
+| `assistant/tool_support.py` | 集中实现 ID/时间/布尔参数解析、返回量限制、名称查询和报文证据格式 |
+| `assistant/tools/__init__.py` | 向模型提供 Tool JSON Schema，并通过显式白名单把调用分发到只读函数 |
+| `assistant/tools/*.py` | 每个文件实现一个独立查询能力，读取服务端注入的解析会话，不接受任意文件路径 |
+
+调用链如下：
+
+```text
+AiAssistant.vue
+  -> POST /api/session/{session_id}/assistant/chat
+    -> assistant.service.chat
+      -> assistant.provider.create_chat_completion
+        -> 模型选择 Tool 并填写参数
+      -> assistant.tools.execute_tool（白名单分发）
+        -> analysis / session messages / ServiceRegistry
+      -> 模型根据 Tool 证据生成 Markdown 回答
+```
 
 ### 命令行调试
 

@@ -1,4 +1,4 @@
-"""Validated request shapes for the assistant API."""
+"""AI 助手 API 的请求参数校验模型。"""
 from __future__ import annotations
 
 from pydantic import BaseModel, Field

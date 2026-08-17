@@ -1,4 +1,4 @@
-"""AI assistant integration for session-scoped SOME/IP analysis."""
+"""绑定解析会话的 SOME/IP AI 助手集成入口。"""
 
 from .schemas import AssistantChatRequest, AssistantConfigRequest
 from .service import (

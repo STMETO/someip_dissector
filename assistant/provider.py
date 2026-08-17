@@ -1,8 +1,7 @@
-"""Small OpenAI-compatible chat-completions client.
+"""轻量的 OpenAI-compatible Chat Completions 客户端。
 
-The MVP intentionally uses the Python standard library, keeping model access
-independent from a specific AI SDK. A provider abstraction can replace this
-module later without changing the Tool or UI contracts.
+第一版只使用 Python 标准库，避免 Tool 和 UI 绑定特定 AI SDK；后续可以替换
+供应商适配层，而不改变现有 Tool 与页面接口。
 """
 from __future__ import annotations
 
@@ -16,7 +15,7 @@ from .config import ModelConfig
 
 
 class ModelProviderError(RuntimeError):
-    """A safe, user-facing model connection error."""
+    """允许安全显示给用户的模型连接错误。"""
 
 
 def create_chat_completion(
@@ -32,8 +31,7 @@ def create_chat_completion(
         "tool_choice": "auto",
         "temperature": 0.1,
     }
-    # DeepSeek V4 enables thinking by default. The MVP uses non-thinking mode
-    # so the generic Tool loop does not expose or depend on reasoning traces.
+    # DeepSeek V4 默认开启思考模式；当前通用 Tool 循环不依赖或暴露推理轨迹。
     if urlparse(config.api_base).hostname == "api.deepseek.com":
         payload["thinking"] = {"type": "disabled"}
     request = Request(

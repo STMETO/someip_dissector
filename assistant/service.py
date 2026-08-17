@@ -1,4 +1,4 @@
-"""Assistant orchestration and short in-memory conversation context."""
+"""AI 助手编排与进程内短期对话上下文。"""
 from __future__ import annotations
 
 import json
@@ -60,7 +60,7 @@ def chat(
         history = list(_conversations.get(key, []))
 
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": _system_prompt(state)},
+        {"role": "system", "content": _system_prompt(state, config)},
         *history,
         {"role": "user", "content": question.strip()},
     ]
@@ -117,8 +117,7 @@ def _run_tool_loop(
             "content": model_message.get("content") or "",
             "tool_calls": tool_calls,
         }
-        # Preserve provider-specific reasoning state when a compatible model
-        # returns it, even though the default DeepSeek preset disables thinking.
+        # 兼容供应商返回的推理状态；默认 DeepSeek 配置仍关闭思考模式。
         if model_message.get("reasoning_content") is not None:
             assistant_message["reasoning_content"] = model_message["reasoning_content"]
         messages.append(assistant_message)
@@ -142,16 +141,22 @@ def _run_tool_loop(
     raise ModelProviderError("工具调用次数超过限制")
 
 
-def _system_prompt(state: Any) -> str:
+def _system_prompt(state: Any, config: Any) -> str:
     return f"""你是 SOME/IP 和 SOME/IP-SD 抓包分析助手。
 当前解析会话包含 {state.total_messages} 条报文，PCAP 文件为 {state.pcap_name}。
+当前实际调用的模型配置是 {config.model}，API 地址是 {config.api_base}。
 
 规则：
-1. 涉及 Offer、Subscribe、Ack、Notification 或订阅异常的事实时，必须调用工具查询。
+1. 涉及服务、报文、Offer、Subscribe、Ack、Nack、Notification 或订阅异常的事实时，必须调用工具查询。
 2. 工具结果是事实来源，不得虚构抓包中不存在的服务、客户端、数量或状态。
 3. 明确区分事实与推断。信息不足时直接说明限制。
 4. Service ID 同时显示十六进制形式。回答使用用户提问的语言。
-5. 当前只有订阅诊断工具；超出能力时说明尚未提供对应工具。"""
+5. 每个主要诊断结论必须至少引用一条工具证据，写明 message_index、frame_index 和 timestamp_iso；不能只写“来自工具”。
+6. 用户询问模型身份时，只能回答上述实际模型名称与 API 配置，不得猜测未提供的版本或供应商信息。
+7. 可用能力包括订阅总览、服务查找、Offer 时间线、订阅时间线、报文检索和单报文详情。
+8. Tool 返回的关联规则属于项目诊断规则；不能把关联结果描述成协议线上直接携带的字段。
+9. Offer 冲突必须以相同 Service ID 和 Instance ID 被多个 ECU 发布为准，不能仅因同一 Service ID 存在多个 Instance 而判冲突。
+10. “已订阅但抓包内无 Notification”只是抓包时段内的现象，不等于已证明服务故障；观察到少量 Notification 也不能单独证明频率和业务行为完全健康。"""
 
 
 def _parse_arguments(value: Any) -> dict[str, Any]:

@@ -1,8 +1,7 @@
-"""Runtime model configuration.
+"""运行时模型配置。
 
-The browser may submit a key for this local analysis process, but the key is
-never returned, logged, written to disk, or stored in browser localStorage.
-Environment variables remain the preferred deployment configuration.
+浏览器可以向本地分析进程提交密钥，但后端不会返回、记录或写入磁盘，
+前端也不写入 localStorage。正式部署仍优先使用环境变量配置。
 """
 from __future__ import annotations
 
@@ -35,7 +34,7 @@ _runtime_model = ""
 
 
 def get_model_config() -> ModelConfig:
-    """Resolve runtime values first, then environment values and defaults."""
+    """按运行时配置、环境变量、默认值的顺序解析模型配置。"""
     with _lock:
         runtime_key = _runtime_api_key
         runtime_base = _runtime_api_base
@@ -61,7 +60,7 @@ def set_runtime_config(
     api_base: str,
     model: str,
 ) -> ModelConfig:
-    """Update process-local credentials without exposing the resolved key."""
+    """更新当前进程内凭据，不向调用方返回最终密钥。"""
     current = get_model_config()
     next_key = (api_key or "").strip() or current.api_key
     next_base = api_base.strip().rstrip("/")
@@ -83,7 +82,7 @@ def set_runtime_config(
 
 
 def public_config(config: ModelConfig | None = None) -> dict[str, object]:
-    """Return model status without returning any credential material."""
+    """返回模型连接状态，不包含任何凭据内容。"""
     resolved = config or get_model_config()
     return {
         "configured": resolved.configured,

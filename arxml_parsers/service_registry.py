@@ -141,6 +141,13 @@ class ServiceRegistry:
         """根据 Service ID + EventGroup ID 查询 EventGroup 名称。"""
         return self._eg_name_map.get((service_id, eg_id))
 
+    def list_services(self) -> list[tuple[int, str]]:
+        """列出 ARXML 中注册的全部服务 ID 和名称，按 ID 排序。
+
+        AI 服务查找和其他展示层通过公开接口读取名称，避免依赖注册表内部字典。
+        """
+        return sorted(self._svc_name_map.items())
+
     @property
     def method_count(self) -> int:
         """统计注册的RPC报文总数"""
