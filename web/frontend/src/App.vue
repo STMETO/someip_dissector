@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, reactive, onMounted, onUnmounted, watch } from 'vue'
 import UploadBar from './components/UploadBar.vue'
+import AiAssistant from './components/AiAssistant.vue'
 import SessionSwitcher from './components/SessionSwitcher.vue'
 import MessageTable from './components/MessageTable.vue'
 import ParseTree from './components/ParseTree.vue'
@@ -31,7 +32,12 @@ const progressText = ref('')
 const currentTab = ref('parse')  // 'parse' | 'signal' | 'subscription'
 const signalPrefill = ref(null) // 从诊断页跳转时预填参数
 const theme = ref(_loadTheme())
+const assistantOpen = ref(false)
 let activationRequestId = 0
+
+const activePcapName = computed(() => (
+  savedSessions.value.find(item => item.session_id === sessionId.value)?.pcap_name || ''
+))
 
 const timingOverview = computed(() => {
   const t = activeTimings.value || {}
@@ -304,6 +310,14 @@ function _formatDuration(ms) {
           @refresh="loadSessions"
         />
       </template>
+      <template #assistant-trigger>
+        <button
+          type="button"
+          class="assistant-launch"
+          :aria-pressed="assistantOpen"
+          @click="assistantOpen = !assistantOpen"
+        >AI 助手</button>
+      </template>
     </UploadBar>
     <!-- 进度条：上传解析阶段（动画） + 消息加载阶段（填充） -->
     <div class="progress-bar" v-if="uploading || loading">
@@ -315,9 +329,9 @@ function _formatDuration(ms) {
     </div>
     <main v-if="!sessionId" class="empty-workspace">
       <div class="empty-protocol mono">SOME/IP</div>
-      <h1>No active capture</h1>
-      <p>Select a PCAP capture and its ARXML definition to begin.</p>
-      <div class="empty-requirements" aria-label="Required files">
+      <h1>未选择解析记录</h1>
+      <p>选择 PCAP 抓包及对应的 ARXML 定义后开始解析。</p>
+      <div class="empty-requirements" aria-label="所需文件">
         <span>PCAP</span>
         <span>ARXML</span>
       </div>
@@ -369,26 +383,31 @@ function _formatDuration(ms) {
     <div class="workspace" v-show="sessionId && currentTab === 'subscription'">
       <SubscriptionReport :sessionId="sessionId" @jump-signal="onJumpToSignal" />
     </div>
+    <AiAssistant
+      v-model:open="assistantOpen"
+      :sessionId="sessionId"
+      :pcapName="activePcapName"
+    />
     <Teleport to="body">
       <div v-if="pendingDeleteSession" class="confirm-layer" role="presentation">
         <button
           class="confirm-backdrop"
           type="button"
-          aria-label="Cancel delete"
+          aria-label="取消删除"
           @click="cancelDeleteLocalSession"
         ></button>
-        <section class="confirm-dialog" role="alertdialog" aria-modal="true" aria-label="Delete local parse record">
+        <section class="confirm-dialog" role="alertdialog" aria-modal="true" aria-label="删除本地解析记录">
           <header>
-            <strong>Delete local record?</strong>
-            <span>This removes the parse record from the current UI session.</span>
+            <strong>删除本地记录？</strong>
+            <span>该解析记录将从当前页面会话中彻底删除。</span>
           </header>
           <div class="confirm-target">
             <span :title="pendingDeleteSession.pcap_name">{{ pendingDeleteSession.pcap_name || 'capture' }}</span>
             <small class="mono">{{ pendingDeleteSession.session_id }}</small>
           </div>
           <footer>
-            <button type="button" class="btn-lite" @click="cancelDeleteLocalSession">Cancel</button>
-            <button type="button" class="btn-danger" @click="confirmDeleteLocalSession">Delete</button>
+            <button type="button" class="btn-lite" @click="cancelDeleteLocalSession">取消</button>
+            <button type="button" class="btn-danger" @click="confirmDeleteLocalSession">删除</button>
           </footer>
         </section>
       </div>
@@ -413,6 +432,24 @@ button, input, select { font: inherit; }
   height: 100%;
   min-width: 780px;
   background: var(--canvas);
+}
+.assistant-launch {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-control);
+  background: var(--accent-soft);
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+.assistant-launch:hover,
+.assistant-launch[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--surface-selected);
+  color: var(--accent-hover);
 }
 .empty-workspace {
   flex: 1;

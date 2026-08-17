@@ -59,6 +59,7 @@ function onDrop(e) {
       </div>
       <div class="toolbar-actions">
         <slot name="session-switcher"></slot>
+        <slot name="assistant-trigger"></slot>
         <label class="pick-btn" :class="{ active: pcapFile }">
           {{ pcapFile ? pcapFile.name : '选择 PCAP' }}
           <input type="file" accept=".pcap,.pcapng,.cap" @change="handlePcap">

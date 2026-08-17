@@ -15,6 +15,17 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
+from assistant import (
+    AssistantChatRequest,
+    AssistantConfigRequest,
+    AssistantError,
+    chat as assistant_chat,
+    clear_all_conversations,
+    clear_conversations,
+    configure as configure_assistant,
+    status as assistant_status,
+)
+
 from web.backend.handlers.analysis import (
     clear_all_sessions,
     build_message_detail,
@@ -37,7 +48,9 @@ _HAS_FRONTEND = _FRONTEND_DIST.exists() and (_FRONTEND_DIST / "index.html").exis
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     clear_all_sessions()
+    clear_all_conversations()
     yield
+    clear_all_conversations()
     clear_all_sessions()
 
 
@@ -69,8 +82,42 @@ async def sessions() -> JSONResponse:
 
 @app.post("/api/sessions/cleanup")
 async def cleanup_sessions() -> JSONResponse:
+    clear_all_conversations()
     await run_in_threadpool(clear_all_sessions)
     return JSONResponse({"ok": True})
+
+
+# ---- AI assistant ----
+
+@app.get("/api/assistant/status")
+async def get_assistant_status() -> JSONResponse:
+    return JSONResponse(assistant_status())
+
+
+@app.post("/api/assistant/config")
+async def set_assistant_config(request: AssistantConfigRequest) -> JSONResponse:
+    try:
+        result = configure_assistant(request)
+    except AssistantError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return JSONResponse(result)
+
+
+@app.post("/api/session/{session_id}/assistant/chat")
+async def ask_assistant(
+    session_id: str,
+    request: AssistantChatRequest,
+) -> JSONResponse:
+    try:
+        result = await run_in_threadpool(
+            assistant_chat,
+            session_id,
+            request.question,
+            request.conversation_id,
+        )
+    except AssistantError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return JSONResponse(result)
 
 
 @app.post("/api/session/{session_id}/persist")
@@ -161,6 +208,7 @@ async def signal_data(
 
 @app.delete("/api/session/{session_id}")
 async def delete_session(session_id: str) -> JSONResponse:
+    clear_conversations(session_id)
     await run_in_threadpool(clear_session, session_id)
     return JSONResponse({"ok": True})
 

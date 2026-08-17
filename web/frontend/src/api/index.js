@@ -68,6 +68,24 @@ export async function fetchSubscriptionReport(sessionId) {
   return data
 }
 
+export async function fetchAssistantStatus() {
+  const { data } = await api.get('/assistant/status')
+  return data
+}
+
+export async function configureAssistant(config) {
+  const { data } = await api.post('/assistant/config', config)
+  return data
+}
+
+export async function askAssistant(sessionId, question, conversationId = null) {
+  const { data } = await api.post(`/session/${sessionId}/assistant/chat`, {
+    question,
+    conversation_id: conversationId,
+  })
+  return data
+}
+
 export function exportUrl(sessionId, filename) {
   return `/api/export/${sessionId}/${filename}`
 }

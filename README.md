@@ -69,6 +69,13 @@ someip_dissector/
 │   ├── parser.py                       # 调度器 + TP 重组 + SD 解析
 │   └── message_view.py                 # 兼容包装：转发到 presentation.message_view
 │
+├── assistant/                          # AI 问答编排层（不依赖具体 Web 页面）
+│   ├── config.py                       # 模型地址、模型名称和进程内 API Key
+│   ├── provider.py                     # OpenAI-compatible 请求客户端
+│   ├── service.py                      # 对话上下文和 Tool Calling 循环
+│   └── tools/                          # 一个文件实现一个只读查询 Tool
+│       └── subscription_status.py      # Offer / Subscribe / Ack / Notification 查询
+│
 ├── core/                               # 全链路解析编排层（不依赖 Web）
 │   └── pipeline.py                     # ARXML 编译 → PCAP 解析 → Payload 反序列化
 │
@@ -202,6 +209,29 @@ python run.py web
 |------|------|
 | `http://localhost:8000` | Web 界面 |
 | `http://localhost:8000/docs` | API 文档 (Swagger) |
+
+### AI 分析助手（MVP）
+
+页面右上角的 `AI 助手` 会打开当前解析会话的侧边问答面板。第一版提供
+`get_subscription_status` Tool，可查询 SOME/IP-SD 的 Offer、Subscribe、Ack 和
+Notification 诊断结果。
+
+页面默认填充 DeepSeek 官方 OpenAI-compatible 地址和 `deepseek-v4-flash` 模型。
+不同服务商签发的 API Key 不通用，切换服务商时必须同时检查 API Key、API 地址
+和模型名称。API Key 只保存在后端进程内存，不会写入浏览器存储或项目文件。
+
+也可以在启动服务前通过环境变量配置 DeepSeek：
+
+```bash
+export DEEPSEEK_API_KEY="your-deepseek-api-key"
+export AI_API_BASE="https://api.deepseek.com"
+export AI_MODEL="deepseek-v4-flash"
+python run.py web
+```
+
+兼容接口需要实现 `POST {AI_API_BASE}/chat/completions` 并支持 Tool Calling。
+远程部署时应使用 HTTPS，并在后续加入用户认证和独立密钥存储。后续功能见
+[`TODO.md`](TODO.md)。
 
 ### 命令行调试
 

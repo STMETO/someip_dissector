@@ -159,8 +159,8 @@ def deserialize(messages: list[dict[str, Any]],
     output = {
         "summary": {
             "total_messages": len(messages),
-            "deserialized": hit,
-            "missed": len(messages) - hit,
+            "deserialized": hit,   
+            "missed": len(messages) - hit, 
         },
         "results": results,
     }
