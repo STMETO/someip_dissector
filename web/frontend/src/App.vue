@@ -9,8 +9,9 @@ import SignalTiming from './components/SignalTiming.vue'
 import SubscriptionReport from './components/SubscriptionReport.vue'
 import { cleanupSessions, fetchMessages, fetchMessageDetail, fetchSessions, deleteSession, persistSession, unpersistSession } from './api'
 
-const SPLIT_STORAGE_KEY = 'someip-ui-split-percent'
+const SPLIT_STORAGE_KEY = 'someip-ui-split-percent-v3'
 const THEME_STORAGE_KEY = 'someip-ui-theme'
+const DEFAULT_SPLIT_PERCENT = 50
 
 const sessionId = ref('')
 const summary = reactive({ total_messages: 0, parsed_count: 0 })
@@ -30,10 +31,12 @@ const searchText = ref('')
 const progress = ref(0)         // 0-100, 消息加载进度
 const progressText = ref('')
 const currentTab = ref('parse')  // 'parse' | 'signal' | 'subscription'
+const parsePaneMode = ref('split') // 'list' | 'split' | 'tree'
 const signalPrefill = ref(null) // 从诊断页跳转时预填参数
 const theme = ref(_loadTheme())
 const assistantOpen = ref(false)
 const messageTableRef = ref(null)
+const parseWorkspaceRef = ref(null)
 const subscriptionFocus = ref(null)
 let navigationToken = 0
 let activationRequestId = 0
@@ -89,6 +92,7 @@ async function onNavigateMessage(link) {
   const index = Number(link?.message_index)
   if (!Number.isInteger(index)) return
   currentTab.value = 'parse'
+  parsePaneMode.value = 'split'
   searchText.value = ''
   await nextTick()
   const summaryRow = messages.value.find(item => Number(item.index) === index)
@@ -145,8 +149,11 @@ function onDragStart(e) {
   document.addEventListener('mouseup', onDragEnd)
 }
 function onDrag(e) {
-  const pct = (e.clientX / window.innerWidth) * 100
-  splitPercent.value = Math.max(30, Math.min(72, pct))
+  const rect = parseWorkspaceRef.value?.getBoundingClientRect()
+  if (!rect?.width) return
+  // AI 面板打开后主工作区不再等于窗口宽度，必须以解析区自身为基准。
+  const pct = ((e.clientX - rect.left) / rect.width) * 100
+  splitPercent.value = Math.max(34, Math.min(72, pct))
 }
 function onDragEnd() {
   dragging.value = false
@@ -156,7 +163,7 @@ function onDragEnd() {
 }
 
 function resetSplit() {
-  splitPercent.value = 46
+  splitPercent.value = DEFAULT_SPLIT_PERCENT
   window.localStorage.setItem(SPLIT_STORAGE_KEY, String(splitPercent.value))
 }
 
@@ -328,10 +335,10 @@ function releaseSessions() {
 function _loadSplitPercent() {
   const raw = window.localStorage.getItem(SPLIT_STORAGE_KEY)
   const parsed = Number(raw)
-  if (Number.isFinite(parsed) && parsed >= 30 && parsed <= 72) {
+  if (Number.isFinite(parsed) && parsed >= 34 && parsed <= 72) {
     return parsed
   }
-  return 46
+  return DEFAULT_SPLIT_PERCENT
 }
 
 function _loadTheme() {
@@ -385,82 +392,115 @@ function _formatDuration(ms) {
         {{ uploading ? '后台解析中，请耐心等待...' : (progressText || '加载中...') }}
       </span>
     </div>
-    <main v-if="!sessionId" class="empty-workspace">
-      <div class="empty-protocol mono">SOME/IP</div>
-      <h1>未选择解析记录</h1>
-      <p>选择 PCAP 抓包及对应的 ARXML 定义后开始解析。</p>
-      <div class="empty-requirements" aria-label="所需文件">
-        <span>PCAP</span>
-        <span>ARXML</span>
+    <div class="content-stage" :class="{ 'has-assistant': assistantOpen }">
+      <div class="content-main">
+        <main v-if="!sessionId" class="empty-workspace">
+          <div class="empty-protocol mono">SOME/IP</div>
+          <h1>未选择解析记录</h1>
+          <p>选择 PCAP 抓包及对应的 ARXML 定义后开始解析。</p>
+          <div class="empty-requirements" aria-label="所需文件">
+            <span>PCAP</span>
+            <span>ARXML</span>
+          </div>
+        </main>
+        <section class="top-strip" v-if="sessionId">
+          <nav class="tab-bar">
+            <button class="tab-btn" :aria-pressed="currentTab === 'parse'" :class="{ active: currentTab === 'parse' }" @click="currentTab = 'parse'">
+              报文解析
+            </button>
+            <button class="tab-btn" :aria-pressed="currentTab === 'signal'" :class="{ active: currentTab === 'signal' }" @click="currentTab = 'signal'">
+              信号时序
+            </button>
+            <button class="tab-btn" :aria-pressed="currentTab === 'subscription'" :class="{ active: currentTab === 'subscription' }" @click="currentTab = 'subscription'">
+              订阅诊断
+            </button>
+          </nav>
+          <div v-if="currentTab === 'parse'" class="parse-mode-switch" role="group" aria-label="报文解析布局">
+            <button
+              type="button"
+              :aria-pressed="parsePaneMode === 'list'"
+              :class="{ active: parsePaneMode === 'list' }"
+              title="仅显示消息列表"
+              @click="parsePaneMode = 'list'"
+            >列表</button>
+            <button
+              type="button"
+              :aria-pressed="parsePaneMode === 'split'"
+              :class="{ active: parsePaneMode === 'split' }"
+              title="同时显示消息列表和解析树"
+              @click="parsePaneMode = 'split'"
+            >双栏</button>
+            <button
+              type="button"
+              :aria-pressed="parsePaneMode === 'tree'"
+              :class="{ active: parsePaneMode === 'tree' }"
+              title="仅显示解析树"
+              @click="parsePaneMode = 'tree'"
+            >树形</button>
+          </div>
+          <section class="overview-bar">
+            <span class="overview-pill mono">会话 {{ sessionId }}</span>
+            <span class="overview-pill">报文 {{ summary.total_messages || 0 }}</span>
+            <span class="overview-pill is-ok">已解析 {{ summary.parsed_count || 0 }}</span>
+            <span class="overview-pill">导出 {{ hasExport ? '开启' : '关闭' }}</span>
+            <span class="overview-pill">总耗时 {{ timingOverview.total }}</span>
+            <span class="overview-pill">ARXML {{ timingOverview.arxml }}</span>
+            <span class="overview-pill">PCAP {{ timingOverview.pcap }}</span>
+            <span class="overview-pill">反序列化 {{ timingOverview.deserialize }}</span>
+            <span class="overview-pill">树形渲染 {{ timingOverview.render }}</span>
+            <span class="overview-pill">查询索引 {{ timingOverview.queryIndex }}</span>
+          </section>
+        </section>
+        <!-- 报文解析视图：网格列会自动扣除中间分隔条宽度。 -->
+        <div
+          ref="parseWorkspaceRef"
+          class="workspace parse-workspace"
+          :class="`pane-mode-${parsePaneMode}`"
+          v-show="sessionId && currentTab === 'parse'"
+          :style="{ '--list-pane-width': splitPercent + '%' }"
+        >
+          <div v-show="parsePaneMode !== 'tree'" class="pane pane-left">
+            <MessageTable ref="messageTableRef" :messages="messages" :loading="loading"
+                          :selectedIndex="selectedMsg?.index"
+                          v-model:searchText="searchText"
+                          @select="onSelect" />
+          </div>
+          <div v-show="parsePaneMode === 'split'" class="splitter" @mousedown.prevent="onDragStart" @dblclick="resetSplit" title="拖动调整比例，双击恢复默认布局">
+            <span class="splitter-handle"></span>
+          </div>
+          <div v-show="parsePaneMode !== 'list'" class="pane pane-right">
+            <ParseTree :message="selectedMsg" :key="selectedMsg?.index" />
+          </div>
+        </div>
+        <!-- 信号时序视图 -->
+        <div class="workspace" v-show="sessionId && currentTab === 'signal'">
+          <SignalTiming
+            :sessionId="sessionId"
+            :prefill="signalPrefill"
+            :theme="theme"
+            @navigate-message="onNavigateMessage"
+          />
+        </div>
+        <!-- 订阅诊断视图 -->
+        <div class="workspace" v-show="sessionId && currentTab === 'subscription'">
+          <SubscriptionReport
+            :sessionId="sessionId"
+            :focus="subscriptionFocus"
+            @jump-signal="onJumpToSignal"
+          />
+        </div>
       </div>
-    </main>
-    <section class="top-strip" v-if="sessionId">
-      <nav class="tab-bar">
-        <button class="tab-btn" :aria-pressed="currentTab === 'parse'" :class="{ active: currentTab === 'parse' }" @click="currentTab = 'parse'">
-          报文解析
-        </button>
-        <button class="tab-btn" :aria-pressed="currentTab === 'signal'" :class="{ active: currentTab === 'signal' }" @click="currentTab = 'signal'">
-          信号时序
-        </button>
-        <button class="tab-btn" :aria-pressed="currentTab === 'subscription'" :class="{ active: currentTab === 'subscription' }" @click="currentTab = 'subscription'">
-          订阅诊断
-        </button>
-      </nav>
-      <section class="overview-bar">
-        <span class="overview-pill mono">会话 {{ sessionId }}</span>
-        <span class="overview-pill">报文 {{ summary.total_messages || 0 }}</span>
-        <span class="overview-pill is-ok">已解析 {{ summary.parsed_count || 0 }}</span>
-        <span class="overview-pill">导出 {{ hasExport ? '开启' : '关闭' }}</span>
-        <span class="overview-pill">总耗时 {{ timingOverview.total }}</span>
-        <span class="overview-pill">ARXML {{ timingOverview.arxml }}</span>
-        <span class="overview-pill">PCAP {{ timingOverview.pcap }}</span>
-        <span class="overview-pill">反序列化 {{ timingOverview.deserialize }}</span>
-        <span class="overview-pill">树形渲染 {{ timingOverview.render }}</span>
-        <span class="overview-pill">查询索引 {{ timingOverview.queryIndex }}</span>
-      </section>
-    </section>
-    <!-- 报文解析视图 -->
-    <div class="workspace" v-show="sessionId && currentTab === 'parse'">
-      <div class="pane pane-left" :style="{ width: splitPercent + '%' }">
-        <MessageTable ref="messageTableRef" :messages="messages" :loading="loading"
-                      :selectedIndex="selectedMsg?.index"
-                      v-model:searchText="searchText"
-                      @select="onSelect" />
-      </div>
-      <div class="splitter" @mousedown.prevent="onDragStart" @dblclick="resetSplit" title="拖动调整比例，双击恢复默认布局">
-        <span class="splitter-handle"></span>
-      </div>
-      <div class="pane pane-right" :style="{ width: (100 - splitPercent) + '%' }">
-        <ParseTree :message="selectedMsg" :key="selectedMsg?.index" />
-      </div>
-    </div>
-    <!-- 信号时序视图 -->
-    <div class="workspace" v-show="sessionId && currentTab === 'signal'">
-      <SignalTiming
+      <AiAssistant
+        v-model:open="assistantOpen"
         :sessionId="sessionId"
-        :prefill="signalPrefill"
-        :theme="theme"
+        :pcapName="activePcapName"
+        :persistent="hasExport"
         @navigate-message="onNavigateMessage"
+        @navigate-service="onNavigateService"
+        @navigate-eventgroup="onNavigateEventgroup"
+        @navigate-signal="onNavigateSignal"
       />
     </div>
-    <!-- 订阅诊断视图 -->
-    <div class="workspace" v-show="sessionId && currentTab === 'subscription'">
-      <SubscriptionReport
-        :sessionId="sessionId"
-        :focus="subscriptionFocus"
-        @jump-signal="onJumpToSignal"
-      />
-    </div>
-    <AiAssistant
-      v-model:open="assistantOpen"
-      :sessionId="sessionId"
-      :pcapName="activePcapName"
-      :persistent="hasExport"
-      @navigate-message="onNavigateMessage"
-      @navigate-service="onNavigateService"
-      @navigate-eventgroup="onNavigateEventgroup"
-      @navigate-signal="onNavigateSignal"
-    />
     <Teleport to="body">
       <div v-if="pendingDeleteSession" class="confirm-layer" role="presentation">
         <button
@@ -505,6 +545,21 @@ button, input, select { font: inherit; }
   height: 100%;
   min-width: 780px;
   background: var(--canvas);
+}
+.content-stage {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  overflow: hidden;
+}
+.content-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 .assistant-launch {
   min-height: 34px;
@@ -672,6 +727,14 @@ button, input, select { font: inherit; }
   gap: 0;
   min-height: 0;
 }
+.parse-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, var(--list-pane-width)) 12px minmax(0, 1fr);
+}
+.parse-workspace.pane-mode-list,
+.parse-workspace.pane-mode-tree {
+  grid-template-columns: minmax(0, 1fr);
+}
 .pane {
   overflow: hidden;
   display: flex;
@@ -682,7 +745,9 @@ button, input, select { font: inherit; }
   box-shadow: var(--shadow-panel);
 }
 .pane-left { min-width: 320px; background: var(--surface); }
-.pane-right { min-width: 420px; background: var(--surface); }
+.pane-right { min-width: 360px; background: var(--surface); }
+.content-stage.has-assistant .pane-left,
+.content-stage.has-assistant .pane-right { min-width: 0; }
 .splitter {
   width: 12px;
   cursor: col-resize;
@@ -743,6 +808,36 @@ button, input, select { font: inherit; }
   gap: 2px;
   flex-shrink: 0;
 }
+.parse-mode-switch {
+  display: inline-grid;
+  grid-template-columns: repeat(3, auto);
+  flex-shrink: 0;
+  align-self: center;
+  margin-bottom: 8px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+}
+.parse-mode-switch button {
+  min-width: 42px;
+  min-height: 27px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+.parse-mode-switch button:hover { color: var(--text-primary); }
+.parse-mode-switch button.active {
+  background: var(--surface-raised);
+  color: var(--accent);
+  box-shadow: 0 1px 3px rgba(30, 38, 50, .12);
+}
 .tab-btn {
   min-height: 36px;
   padding: 0 16px;
@@ -767,7 +862,9 @@ button, input, select { font: inherit; }
   gap: 7px;
   justify-content: flex-end;
   align-items: center;
-  flex-shrink: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: auto;
   padding-bottom: 8px;
 }
 .overview-pill {
@@ -786,9 +883,14 @@ button, input, select { font: inherit; }
 @media (max-width: 900px) {
   .app-shell { min-width: 0; }
   .top-strip { flex-direction: column; align-items: stretch; gap: 8px; }
+  .parse-mode-switch { align-self: flex-start; margin-bottom: 0; }
   .overview-bar { justify-content: flex-start; padding-bottom: 0; }
   .workspace { flex-direction: column; padding: 10px; gap: 10px; }
+  .parse-workspace { display: flex; }
   .pane-left, .pane-right { width: 100% !important; min-width: 0; min-height: 300px; }
   .splitter { display: none; }
+  /* 窄屏打开助手时切换到对话视图，避免任何内容覆盖。 */
+  .content-stage.has-assistant .content-main { display: none; }
+  .content-stage.has-assistant > .assistant-drawer { width: 100% !important; }
 }
 </style>

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, reactive, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, reactive, onMounted, onUnmounted, nextTick } from 'vue'
 
 const props = defineProps({
   messages: Array, loading: Boolean, selectedIndex: Number, searchText: String,
@@ -11,29 +11,141 @@ const tableWrap = ref(null)
 const pageSize = 100
 
 // ---- 列宽拖动 ----
+const columnOrder = [
+  'index', 'frame_index', 'timestamp', 'service_id', 'method_id',
+  'msg_type', 'transport', 'payload_length', 'status',
+]
 const colWidths = reactive({
-  index: 45, frame_index: 45, timestamp: 108, service_id: 140, method_id: 140,
-  msg_type: 110, transport: 52, payload_length: 45, status: 55,
+  index: 50,
+  frame_index: 50,
+  timestamp: 78,
+  service_id: 92,
+  method_id: 104,
+  msg_type: 86,
+  transport: 44,
+  payload_length: 48,
+  status: 68,
 })
+const flexColumnWeights = {
+  timestamp: 1,
+  service_id: 2,
+  method_id: 2,
+  msg_type: 1.5,
+}
+const minColWidths = computed(() => {
+  const rows = props.messages || []
+  return {
+    // 紧凑列按当前数据最长文本计算，避免一位数抓包浪费宽度、多位数又被截断。
+    index: compactColumnWidth('序号', rows, row => row.index, 46),
+    frame_index: compactColumnWidth('帧号', rows, row => row.frame_index, 46),
+    // 信息列只保证表头完整，内容过长时由单元格省略号和 title 承接。
+    timestamp: 78,
+    service_id: 92,
+    method_id: 104,
+    msg_type: 86,
+    transport: compactColumnWidth('协议', rows, row => row.transport || '-', 44),
+    payload_length: compactColumnWidth('长度', rows, row => row.payload_length, 48),
+    // 状态单元格还包含标签自身的水平内边距和边框。
+    status: compactColumnWidth('状态', rows, row => statusLabel(row.parse_status), 68, 32),
+  }
+})
+const tableWidth = computed(() => (
+  columnOrder.reduce((total, column) => total + colWidths[column], 0)
+))
 let resizeCol = null, resizeStartX = 0, resizeStartW = 0
+let tableResizeObserver = null
+
+watch(minColWidths, (widths) => {
+  // 切换解析记录后重新按新数据计算，不继承上一组抓包的无效列宽。
+  columnOrder.forEach((column) => { colWidths[column] = widths[column] })
+  nextTick(measureTableViewport)
+}, { immediate: true })
+
+onMounted(() => {
+  measureTableViewport()
+  if (!tableWrap.value) return
+  if (typeof ResizeObserver === 'undefined') {
+    window.addEventListener('resize', measureTableViewport)
+    return
+  }
+  tableResizeObserver = new ResizeObserver((entries) => {
+    const width = entries[0]?.contentRect?.width || 0
+    resizeColumnsWithViewport(width)
+  })
+  tableResizeObserver.observe(tableWrap.value)
+})
+
+function measureTableViewport() {
+  resizeColumnsWithViewport(tableWrap.value?.clientWidth || 0)
+}
+
+function resizeColumnsWithViewport(width) {
+  const nextWidth = Math.floor(width)
+  if (nextWidth <= 0 || resizeCol) return
+  layoutColumns(nextWidth)
+}
+
+function layoutColumns(viewportWidth) {
+  const widths = minColWidths.value
+  const minimumTotal = columnOrder.reduce((total, column) => total + widths[column], 0)
+  columnOrder.forEach((column) => { colWidths[column] = widths[column] })
+
+  // 容器不足时保持最小总宽度，由 msg-table-wrap 提供底部横向滚动条。
+  const extra = viewportWidth - minimumTotal
+  if (extra <= 0) return
+
+  const weightedColumns = Object.keys(flexColumnWeights)
+  const totalWeight = weightedColumns.reduce(
+    (total, column) => total + flexColumnWeights[column],
+    0,
+  )
+  let distributed = 0
+  weightedColumns.forEach((column, index) => {
+    const addition = index === weightedColumns.length - 1
+      ? extra - distributed
+      : Math.floor(extra * flexColumnWeights[column] / totalWeight)
+    colWidths[column] += addition
+    distributed += addition
+  })
+}
+
+function compactColumnWidth(header, rows, valueGetter, floor, horizontalChrome = 18) {
+  let widest = estimateTextWidth(header)
+  rows.forEach((row) => {
+    widest = Math.max(widest, estimateTextWidth(valueGetter(row)))
+  })
+  return Math.max(floor, Math.ceil(widest + horizontalChrome))
+}
+
+function estimateTextWidth(value) {
+  return [...String(value ?? '')].reduce((width, char) => (
+    width + (/[^\x00-\xff]/.test(char) ? 12 : 7.3)
+  ), 0)
+}
 
 function onResizeStart(col, e) {
   resizeCol = col; resizeStartX = e.clientX; resizeStartW = colWidths[col]
   document.addEventListener('mousemove', onResizeMove)
   document.addEventListener('mouseup', onResizeEnd)
+  document.body.classList.add('message-column-resizing')
   e.preventDefault()
 }
 function onResizeMove(e) {
   if (!resizeCol) return
   const delta = e.clientX - resizeStartX
-  colWidths[resizeCol] = Math.max(30, resizeStartW + delta)
+  // 表格宽度由所有列之和决定，只修改当前列，不向相邻列借用空间。
+  colWidths[resizeCol] = Math.max(minColWidths.value[resizeCol], resizeStartW + delta)
 }
 function onResizeEnd() {
   resizeCol = null
+  document.body.classList.remove('message-column-resizing')
   document.removeEventListener('mousemove', onResizeMove)
   document.removeEventListener('mouseup', onResizeEnd)
 }
 onUnmounted(() => {
+  document.body.classList.remove('message-column-resizing')
+  tableResizeObserver?.disconnect()
+  window.removeEventListener('resize', measureTableViewport)
   document.removeEventListener('mousemove', onResizeMove)
   document.removeEventListener('mouseup', onResizeEnd)
 })
@@ -156,18 +268,28 @@ defineExpose({ revealMessage })
       </div>
     </div>
     <div class="msg-table-wrap" ref="tableWrap">
-      <table class="msg-table">
+      <table
+        class="msg-table"
+        :style="{ width: tableWidth + 'px', minWidth: tableWidth + 'px' }"
+      >
+        <colgroup>
+          <col
+            v-for="column in columnOrder"
+            :key="column"
+            :style="{ width: colWidths[column] + 'px' }"
+          >
+        </colgroup>
         <thead>
           <tr>
-            <th :style="{ width: colWidths.index + 'px' }">序号<span class="col-resize" @mousedown="onResizeStart('index', $event)"></span></th>
-            <th :style="{ width: colWidths.frame_index + 'px' }">帧号<span class="col-resize" @mousedown="onResizeStart('frame_index', $event)"></span></th>
-            <th :style="{ width: colWidths.timestamp + 'px' }">Time<span class="col-resize" @mousedown="onResizeStart('timestamp', $event)"></span></th>
-            <th :style="{ width: colWidths.service_id + 'px' }">Service ID<span class="col-resize" @mousedown="onResizeStart('service_id', $event)"></span></th>
-            <th :style="{ width: colWidths.method_id + 'px' }">Method/Event<span class="col-resize" @mousedown="onResizeStart('method_id', $event)"></span></th>
-            <th :style="{ width: colWidths.msg_type + 'px' }">Msg Type<span class="col-resize" @mousedown="onResizeStart('msg_type', $event)"></span></th>
-            <th :style="{ width: colWidths.transport + 'px' }">协议<span class="col-resize" @mousedown="onResizeStart('transport', $event)"></span></th>
-            <th :style="{ width: colWidths.payload_length + 'px' }">长度<span class="col-resize" @mousedown="onResizeStart('payload_length', $event)"></span></th>
-            <th :style="{ width: colWidths.status + 'px' }">状态<span class="col-resize" @mousedown="onResizeStart('status', $event)"></span></th>
+            <th>序号<span class="col-resize" @mousedown="onResizeStart('index', $event)"></span></th>
+            <th>帧号<span class="col-resize" @mousedown="onResizeStart('frame_index', $event)"></span></th>
+            <th>Time<span class="col-resize" @mousedown="onResizeStart('timestamp', $event)"></span></th>
+            <th>Service ID<span class="col-resize" @mousedown="onResizeStart('service_id', $event)"></span></th>
+            <th>Method/Event<span class="col-resize" @mousedown="onResizeStart('method_id', $event)"></span></th>
+            <th>Msg Type<span class="col-resize" @mousedown="onResizeStart('msg_type', $event)"></span></th>
+            <th>协议<span class="col-resize" @mousedown="onResizeStart('transport', $event)"></span></th>
+            <th>长度<span class="col-resize" @mousedown="onResizeStart('payload_length', $event)"></span></th>
+            <th>状态<span class="col-resize" @mousedown="onResizeStart('status', $event)"></span></th>
           </tr>
         </thead>
         <tbody>
@@ -181,10 +303,10 @@ defineExpose({ revealMessage })
             <td class="mono">{{ m.index }}</td>
             <td class="mono">{{ m.frame_index }}</td>
             <td class="mono" :title="m.timestamp_iso || ''">{{ formatTimestamp(m.timestamp_epoch) }}</td>
-            <td class="mono">{{ fmtId(m.service_id, m.service_name) }}</td>
-            <td class="mono">{{ fmtId(m.method_id, m.method_name) }}</td>
-            <td class="mono">{{ fmtMsgType(m) }}</td>
-            <td class="mono">{{ m.transport || '-' }}</td>
+            <td class="mono" :title="fmtId(m.service_id, m.service_name)">{{ fmtId(m.service_id, m.service_name) }}</td>
+            <td class="mono" :title="fmtId(m.method_id, m.method_name)">{{ fmtId(m.method_id, m.method_name) }}</td>
+            <td class="mono" :title="fmtMsgType(m)">{{ fmtMsgType(m) }}</td>
+            <td class="mono" :title="m.transport || '-'">{{ m.transport || '-' }}</td>
             <td class="mono" style="text-align:right">{{ m.payload_length }}</td>
             <td>
               <span class="tag" :class="statusClass(m.parse_status)">
@@ -247,7 +369,12 @@ defineExpose({ revealMessage })
 .search-input::placeholder { color: var(--text-tertiary); }
 .search-input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
 .msg-table-wrap { flex: 1; overflow: auto; background: var(--surface); }
-.msg-table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+.msg-table { border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+.message-column-resizing,
+.message-column-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
 .col-resize {
   position: absolute;
   right: 0;

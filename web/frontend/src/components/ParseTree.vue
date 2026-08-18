@@ -82,13 +82,14 @@ const TreeNode = {
     const open = ref(props.depth <= 1)
     const children = computed(() => props.node?.children || [])
     const hasKids = computed(() => children.value.length > 0)
-    const rowStyle = computed(() => ({ paddingLeft: `${14 + props.depth * 18}px` }))
+    // 父级容器负责层级差，行内保留统一起点，让分支和叶子在同层对齐。
+    const rowStyle = { paddingLeft: '8px' }
 
     return () => {
       if (hasKids.value) {
         const meta = props.node.meta_kind || ''
         return h('div', { class: 'tn' }, [
-          h('div', { class: ['branch-row', open.value ? 'is-open' : ''], style: rowStyle.value }, [
+          h('div', { class: ['branch-row', open.value ? 'is-open' : ''], style: rowStyle }, [
             h('button', {
               class: 'branch-toggle',
               type: 'button',
@@ -96,11 +97,17 @@ const TreeNode = {
               onClick: () => { open.value = !open.value },
             }, open.value ? '-' : '+'),
             h('div', { class: 'branch-main' }, [
-              h('span', { class: 'branch-name' }, props.node.name),
-              h('span', { class: 'branch-type' }, props.node.type || 'container'),
+              h('span', { class: 'branch-name', title: props.node.name }, props.node.name),
+              h('span', {
+                class: 'branch-type',
+                title: props.node.type || 'container',
+              }, props.node.type || 'container'),
               meta ? h('span', { class: `node-badge node-badge-${meta}` }, _metaLabel(meta)) : null,
             ]),
-            h('span', { class: 'branch-meta' }, `${props.node.byte_size || 0}B @ ${props.node.offset || 0}`),
+            h('span', {
+              class: 'branch-meta',
+              title: `${props.node.byte_size || 0}B @ ${props.node.offset || 0}`,
+            }, `${props.node.byte_size || 0}B @ ${props.node.offset || 0}`),
           ]),
           open.value ? h('div', { class: 'branch-children' }, children.value.map((child, idx) => h(TreeNode, {
             node: child,
@@ -112,16 +119,43 @@ const TreeNode = {
 
       const value = _valueParts(props.node)
       const showLocation = props.node.show_location !== false
-      return h('div', { class: 'tn leaf-row', style: rowStyle.value }, [
-        h('div', { class: 'leaf-key' }, props.node.name),
+      const renderedValue = value.kind === 'numeric'
+        ? [
+            h('div', { class: 'value-slot' }, [
+              h('span', {
+                class: 'value-chip hex-chip',
+                title: `hex ${value.hex}`,
+              }, [
+                'hex ', h('strong', null, value.hex),
+              ]),
+            ]),
+            h('div', { class: 'value-slot' }, [
+              h('span', {
+                class: 'value-chip dec-chip',
+                title: `dec ${value.dec}`,
+              }, [
+                'dec ', h('strong', null, value.dec),
+              ]),
+            ]),
+            value.meaning ? h('div', { class: 'value-slot meaning-slot' }, [
+              h('span', { class: 'leaf-meaning', title: value.meaning }, [
+                h('span', { class: 'meta-label' }, 'meaning'),
+                h('span', { class: 'meaning-text' }, value.meaning),
+              ]),
+            ]) : null,
+          ]
+        : h('span', { class: 'plain-value', title: value.text }, value.text)
+      return h('div', { class: 'tn leaf-row', style: rowStyle }, [
+        h('div', { class: 'leaf-key', title: props.node.name }, props.node.name),
         h('div', { class: 'leaf-body' }, [
-          h('div', { class: 'leaf-value' }, value.main),
-          value.meaning ? h('div', { class: 'leaf-meaning' }, [
-            h('span', { class: 'meta-label' }, 'meaning'),
-            h('span', { class: 'meaning-text' }, value.meaning),
-          ]) : null,
+          h('div', {
+            class: ['leaf-value', value.meaning ? 'has-meaning' : ''],
+          }, renderedValue),
         ]),
-        showLocation ? h('div', { class: 'leaf-meta' }, [
+        showLocation ? h('div', {
+          class: 'leaf-meta',
+          title: `len ${props.node.byte_size || 0}B, offset ${props.node.offset || 0}B`,
+        }, [
           h('span', null, ['len ', h('strong', null, `${props.node.byte_size || 0}B`)]),
           h('span', null, ['offset ', h('strong', null, `${props.node.offset || 0}B`)]),
         ]) : null,
@@ -134,16 +168,15 @@ function _valueParts(node) {
   const value = node.value
   if (_isHexDecValue(value)) {
     return {
-      main: [
-        h('span', { class: 'value-chip hex-chip' }, ['hex ', h('strong', null, value.hex || '')]),
-        h('span', { class: 'value-chip dec-chip' }, ['dec ', h('strong', null, String(value.dec ?? 0))]),
-      ],
+      kind: 'numeric',
+      hex: value.hex || '',
+      dec: String(value.dec ?? 0),
       meaning: value.meaning || '',
     }
   }
   return {
-    main: h('span', { class: 'plain-value' }, _formatVal(value)),
-    meaning: '',
+    kind: 'plain',
+    text: _formatVal(value),
   }
 }
 
@@ -196,12 +229,12 @@ function _metaLabel(meta) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  padding: 14px 16px;
+  gap: 10px;
+  padding: 10px 12px;
   background: var(--surface-raised);
   border-bottom: 1px solid var(--border);
 }
-.packet-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.packet-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .packet-id { font-size: 15px; font-weight: 850; color: var(--text-primary); }
 .packet-kind {
   min-height: 24px;
@@ -214,7 +247,7 @@ function _metaLabel(meta) {
   font-size: 12px;
   font-weight: 800;
 }
-.packet-facts { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.packet-facts { display: flex; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
 .fact {
   min-height: 24px;
   display: inline-flex;
@@ -233,7 +266,7 @@ function _metaLabel(meta) {
 .tree-scroll {
   flex: 1;
   overflow: auto;
-  padding: 14px;
+  padding: 8px;
   background: var(--canvas-deep);
 }
 .tree-empty {
@@ -256,18 +289,22 @@ function _metaLabel(meta) {
 .tree-empty-title { color: var(--text-primary); font-size: 18px; font-weight: 850; }
 .tree-empty-subtitle { font-size: 13px; }
 .tree-section {
+  width: 100%;
+  min-width: 540px;
+  container-name: tree-section;
+  container-type: inline-size;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-panel);
   background: var(--surface);
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 .section-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 12px 14px;
+  gap: 8px;
+  padding: 9px 11px;
   background: var(--surface-muted);
   border-bottom: 1px solid var(--border);
 }
@@ -283,22 +320,24 @@ function _metaLabel(meta) {
   font-size: 12px;
   font-weight: 800;
 }
-.tn { font-family: var(--font-mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+.tn { min-width: 0; font-family: var(--font-mono); font-size: 12px; font-variant-numeric: tabular-nums; }
 .branch-row {
-  min-height: 36px;
-  display: flex;
+  min-width: 500px;
+  min-height: 29px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 82px;
   align-items: center;
-  gap: 9px;
-  padding-top: 6px;
-  padding-bottom: 6px;
+  gap: clamp(8px, 1.2cqw, 14px);
+  padding-top: 3px;
+  padding-bottom: 3px;
   padding-right: 12px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
 .branch-row:hover, .leaf-row:hover { background: var(--surface-hover); }
 .branch-toggle {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   border: 1px solid var(--border-strong);
   border-radius: 4px;
   background: var(--surface-subtle);
@@ -309,9 +348,28 @@ function _metaLabel(meta) {
   flex-shrink: 0;
 }
 .branch-toggle:hover { border-color: var(--accent); color: var(--accent-hover); }
-.branch-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.branch-name { color: var(--text-primary); font-weight: 850; }
+.branch-main {
+  display: flex;
+  align-items: center;
+  gap: clamp(6px, 1cqw, 10px);
+  min-width: 0;
+  overflow: hidden;
+}
+.branch-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 48%;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .branch-type {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 52%;
+  overflow: hidden;
   color: var(--accent);
   background: var(--accent-soft);
   border: 1px solid var(--accent-border);
@@ -319,9 +377,22 @@ function _metaLabel(meta) {
   padding: 2px 6px;
   font-size: 12px;
   font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.branch-meta { margin-left: auto; color: var(--text-tertiary); font-size: 12px; }
-.branch-children { border-left: 1px solid var(--border); margin-left: 23px; }
+.branch-meta {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.branch-children {
+  margin-left: 16px;
+  border-left: 1px solid var(--border);
+}
 .node-badge {
   color: var(--text-secondary);
   background: var(--surface-subtle);
@@ -335,74 +406,146 @@ function _metaLabel(meta) {
 .node-badge-sd { color: var(--warning); border-color: var(--warning-border); background: var(--warning-soft); }
 .node-badge-unresolved { color: var(--danger); border-color: var(--danger-border); background: var(--danger-soft); }
 .leaf-row {
+  min-width: 500px;
+  overflow: hidden;
   display: grid;
-  grid-template-columns: minmax(145px, 220px) minmax(260px, 1fr) minmax(155px, auto);
+  grid-template-columns:
+    clamp(200px, 28cqw, 250px)
+    minmax(0, 1fr)
+    clamp(145px, 22cqw, 170px);
   align-items: center;
-  column-gap: 12px;
-  min-height: 38px;
-  padding-top: 7px;
-  padding-bottom: 7px;
+  column-gap: clamp(8px, 1.2cqw, 16px);
+  min-height: 30px;
+  padding-top: 4px;
+  padding-bottom: 4px;
   padding-right: 12px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
 .leaf-key {
+  min-width: 0;
+  overflow: hidden;
+  padding-left: 22px;
   color: var(--text-primary);
   font-weight: 900;
   letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.leaf-body { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.leaf-value { display: inline-flex; align-items: center; gap: 7px; flex-wrap: wrap; min-width: 0; }
+.leaf-body {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+}
+.leaf-value {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: center;
+  column-gap: clamp(8px, 1cqw, 14px);
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
+}
+.leaf-value.has-meaning {
+  grid-template-columns: minmax(64px, 1fr) minmax(56px, 1fr) minmax(105px, 1.35fr);
+}
+.value-slot {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: clamp(5px, .8cqw, 10px);
+  overflow: hidden;
+}
 .value-chip {
+  min-width: 0;
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: clamp(3px, .6cqw, 6px);
   min-height: 24px;
-  padding: 0 8px;
+  padding: 0 clamp(5px, 1cqw, 9px);
   border-radius: var(--radius-control);
   font-size: 12px;
   color: var(--text-secondary);
   background: var(--surface-muted);
   border: 1px solid var(--border);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .value-chip strong { color: var(--text-primary); font-weight: 900; }
 .hex-chip { border-color: var(--accent-border); background: var(--accent-soft); }
 .dec-chip { border-color: var(--border-strong); background: var(--surface-subtle); }
 .plain-value {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
   color: var(--text-primary);
   font-weight: 800;
-  word-break: break-word;
+  padding-inline: clamp(2px, .5cqw, 5px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .leaf-meaning {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: clamp(4px, .8cqw, 7px);
   min-height: 24px;
-  padding: 0 8px;
+  padding: 0 clamp(5px, 1cqw, 9px);
   border: 1px solid var(--accent-border);
   border-radius: var(--radius-control);
   background: var(--accent-soft);
   white-space: nowrap;
 }
 .meta-label { color: var(--accent); font-size: 11px; font-weight: 900; text-transform: uppercase; }
-.meaning-text { color: var(--text-primary); font-weight: 900; }
-.leaf-meta {
-  display: inline-flex;
-  justify-content: flex-end;
-  gap: 8px;
-  color: var(--text-tertiary);
-  font-size: 12px;
+.meaning-text {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-weight: 900;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.leaf-meta strong { color: var(--text-primary); }
-@media (max-width: 1100px) {
-  .leaf-row { grid-template-columns: minmax(130px, 180px) minmax(260px, 1fr); row-gap: 6px; }
-  .leaf-meta { justify-content: flex-start; }
+.leaf-meta {
+  min-width: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(62px, .85fr) minmax(92px, 1.15fr);
+  align-items: center;
+  column-gap: clamp(6px, .8cqw, 10px);
+  color: var(--text-tertiary);
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
 }
+.leaf-meta > span {
+  min-width: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.leaf-meta > span + span {
+  padding-left: clamp(5px, .7cqw, 8px);
+  border-left: 1px solid var(--border-strong);
+}
+.leaf-meta strong { color: var(--text-primary); }
+
+@container tree-section (max-width: 640px) {
+  .leaf-value.has-meaning {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: 4px;
+  }
+  .meaning-slot { grid-column: 1 / -1; }
+}
+
 @media (max-width: 760px) {
   .tree-header { align-items: flex-start; flex-direction: column; }
-  .leaf-row { grid-template-columns: 1fr; }
-  .branch-meta { margin-left: 0; }
-  .branch-row { flex-wrap: wrap; }
 }
 </style>

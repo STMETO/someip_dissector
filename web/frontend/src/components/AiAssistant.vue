@@ -12,10 +12,11 @@ import {
   setAssistantPersistence,
 } from '../api'
 
-const DEFAULT_DRAWER_WIDTH = 440
-const MIN_DRAWER_WIDTH = 360
-const MAX_DRAWER_WIDTH = 960
-const MOBILE_BREAKPOINT = 600
+const DEFAULT_DRAWER_WIDTH = 400
+const MIN_DRAWER_WIDTH = 340
+const MAX_DRAWER_WIDTH = 760
+const MIN_WORKSPACE_WIDTH = 620
+const MOBILE_BREAKPOINT = 900
 
 const props = defineProps({
   open: Boolean,
@@ -488,7 +489,11 @@ function clampDrawerWidth() {
 }
 
 function maxDrawerWidth() {
-  return Math.max(MIN_DRAWER_WIDTH, Math.min(MAX_DRAWER_WIDTH, window.innerWidth - 72))
+  // 桌面端始终给协议分析区保留可操作空间，窄屏由 CSS 切换为单视图。
+  return Math.max(
+    MIN_DRAWER_WIDTH,
+    Math.min(MAX_DRAWER_WIDTH, window.innerWidth - MIN_WORKSPACE_WIDTH),
+  )
 }
 
 function apiError(error, fallback) {
@@ -505,8 +510,7 @@ function apiError(error, fallback) {
 </script>
 
 <template>
-  <Teleport to="body">
-    <Transition name="assistant-panel">
+  <Transition name="assistant-panel">
       <aside
         v-if="open"
         class="assistant-drawer"
@@ -552,7 +556,7 @@ function apiError(error, fallback) {
           <strong :title="pcapName || sessionId || '未选择抓包'">
             {{ pcapName || (sessionId ? `会话 ${sessionId}` : '未选择抓包') }}
           </strong>
-          <small v-if="sessionId" class="mono">{{ sessionId }}</small>
+          <small v-if="sessionId" class="mono" :title="sessionId">{{ sessionId }}</small>
           <button
             v-if="sessionId"
             type="button"
@@ -737,22 +741,23 @@ function apiError(error, fallback) {
           </div>
         </form>
       </aside>
-    </Transition>
-  </Teleport>
+  </Transition>
 </template>
 
 <style>
 .assistant-drawer {
-  position: fixed;
-  inset: 0 0 0 auto;
-  z-index: 115;
+  position: relative;
+  z-index: 3;
+  flex: 0 0 auto;
+  height: 100%;
+  min-width: 0;
   width: min(440px, 100vw);
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   border-left: 1px solid var(--border-strong);
   background: var(--surface);
   color: var(--text-primary);
-  box-shadow: -18px 0 44px rgba(30, 38, 50, .18);
+  box-shadow: -10px 0 26px rgba(30, 38, 50, .10);
 }
 .assistant-drawer.is-resizing { transition: none; }
 .assistant-resize-handle {
@@ -790,7 +795,7 @@ body.assistant-is-resizing {
   user-select: none;
 }
 :root[data-theme="dark"] .assistant-drawer {
-  box-shadow: -18px 0 48px rgba(0, 0, 0, .38);
+  box-shadow: -10px 0 30px rgba(0, 0, 0, .28);
 }
 .assistant-panel-enter-active,
 .assistant-panel-leave-active {
@@ -866,10 +871,11 @@ body.assistant-is-resizing {
 }
 .assistant-context {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: baseline;
-  gap: 3px 10px;
-  padding: 10px 16px;
+  grid-template-columns: auto minmax(72px, 1fr) minmax(0, 88px) auto;
+  align-items: center;
+  gap: 7px;
+  min-height: 42px;
+  padding: 7px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--surface-subtle);
 }
@@ -891,15 +897,13 @@ body.assistant-is-resizing {
   font-weight: 850;
 }
 .assistant-context small {
-  grid-column: 2;
   color: var(--text-tertiary);
   font-size: 10px;
 }
 .conversation-persistence {
-  grid-column: 1 / -1;
-  width: fit-content;
+  width: max-content;
   min-height: 26px;
-  margin-top: 4px;
+  margin: 0;
   padding: 0 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
@@ -1379,7 +1383,7 @@ body.assistant-is-resizing {
   white-space: nowrap;
   border: 0;
 }
-@media (max-width: 600px) {
+@media (max-width: 900px) {
   .assistant-drawer { width: 100vw !important; }
   .assistant-resize-handle { display: none; }
   .assistant-header { padding-left: 12px; }

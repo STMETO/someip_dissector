@@ -34,6 +34,8 @@
   --shadow-panel: 0 12px 28px rgba(42, 51, 64, .10);
   --shadow-popover: 0 18px 44px rgba(42, 51, 64, .18);
   --focus-ring: 0 0 0 3px rgba(36, 93, 204, .20);
+  --selection-bg: #245dcc;
+  --selection-text: #ffffff;
   --radius-panel: 8px;
   --radius-control: 6px;
   --font-sans: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
@@ -76,6 +78,8 @@
   --shadow-panel: 0 14px 32px rgba(0, 0, 0, .24);
   --shadow-popover: 0 20px 48px rgba(0, 0, 0, .36);
   --focus-ring: 0 0 0 3px rgba(120, 165, 245, .24);
+  --selection-bg: #9dbcf5;
+  --selection-text: #101827;
 }
 
 html,
@@ -109,8 +113,13 @@ a:active { transform: translateY(1px); }
 }
 
 ::selection {
-  color: var(--text-primary);
-  background: var(--accent-soft);
+  color: var(--selection-text);
+  background: var(--selection-bg);
+}
+
+::-moz-selection {
+  color: var(--selection-text);
+  background: var(--selection-bg);
 }
 
 * {
