@@ -31,6 +31,7 @@ const props = defineProps({
   loading: Boolean,
   errorText: { type: String, default: '' },
   theme: { type: String, default: 'light' },
+  timeRange: { type: Object, default: null },
 })
 const emit = defineEmits(['point-click'])
 
@@ -51,7 +52,7 @@ onUnmounted(() => {
   chart?.dispose()
 })
 
-watch([() => props.data, () => props.selectInfo, () => props.loading, () => props.errorText, () => props.theme], () => {
+watch([() => props.data, () => props.selectInfo, () => props.loading, () => props.errorText, () => props.theme, () => props.timeRange], () => {
   nextTick(() => renderChart())
 }, { deep: true })
 
@@ -147,6 +148,7 @@ function renderChart() {
 
   const bounds = valueBounds(allVals)
   const seqBounds = valueBounds(allSeqs, 1)
+  const zoomBounds = timeRangeSeqBounds(visibleFields, props.timeRange)
 
   chart.setOption({
     backgroundColor: ui.surface,
@@ -241,6 +243,7 @@ function renderChart() {
         filterMode: 'none',
         brushSelect: true,
         showDataShadow: true,
+        ...(zoomBounds || {}),
         backgroundColor: ui.surfaceSubtle,
         borderColor: ui.border,
         fillerColor: ui.zoomFill,
@@ -255,7 +258,11 @@ function renderChart() {
   chart.on('click', (params) => {
     if (params.componentType !== 'series' || String(params.seriesName).includes('transitions')) return
     const point = params.data?.[2]
-    if (point) emit('point-click', { frame_index: point.frame_index, seq: point.seq })
+    if (point) emit('point-click', {
+      message_index: point.message_index,
+      frame_index: point.frame_index,
+      seq: point.seq,
+    })
   })
 }
 
@@ -307,6 +314,35 @@ function valueBounds(values, minPad = 0) {
   const range = max - min
   const pad = Math.max(minPad, range > 0 ? range * 0.08 : Math.max(Math.abs(min) * 0.08, 1))
   return { min: min - pad, max: max + pad }
+}
+
+function timeRangeSeqBounds(fields, range) {
+  // Number(null) 等于 0；这里显式保留空值，避免无时间范围时误缩放到起点。
+  const start = range?.start_time == null || range.start_time === ''
+    ? NaN
+    : Number(range.start_time)
+  const end = range?.end_time == null || range.end_time === ''
+    ? NaN
+    : Number(range.end_time)
+  if (!Number.isFinite(start) && !Number.isFinite(end)) return null
+  const inRange = fields
+    .flatMap(field => field.points || [])
+    .filter(point => {
+      const timestamp = Number(point.timestamp_epoch)
+      if (!Number.isFinite(timestamp)) return false
+      if (Number.isFinite(start) && timestamp < start) return false
+      if (Number.isFinite(end) && timestamp > end) return false
+      return true
+    })
+    .map(point => Number(point.seq))
+    .filter(Number.isFinite)
+  if (!inRange.length) return null
+  const min = Math.min(...inRange)
+  const max = Math.max(...inRange)
+  // 单个点也需要有可见宽度，否则 ECharts 的滑块会重合且难以恢复。
+  return min === max
+    ? { startValue: min - 0.5, endValue: max + 0.5 }
+    : { startValue: min, endValue: max }
 }
 
 function legendLabel(name) {

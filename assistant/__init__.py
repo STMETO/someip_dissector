@@ -4,6 +4,7 @@ from .schemas import AssistantChatRequest, AssistantConfigRequest
 from .service import (
     AssistantError,
     chat,
+    chat_stream,
     clear_all_conversations,
     clear_conversations,
     configure,
@@ -15,6 +16,7 @@ __all__ = [
     "AssistantConfigRequest",
     "AssistantError",
     "chat",
+    "chat_stream",
     "clear_all_conversations",
     "clear_conversations",
     "configure",

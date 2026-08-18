@@ -18,6 +18,7 @@ const multiSelectEl = ref(null)
 
 let applyingPrefill = false
 let generateTimer = null
+const prefillRange = ref({ start_time: null, end_time: null })
 
 onMounted(() => {
   document.addEventListener('pointerdown', onDocumentPointerDown)
@@ -65,6 +66,7 @@ watch(() => props.meta, () => {
 
 watch(selectedSvcIdx, () => {
   if (applyingPrefill) return
+  prefillRange.value = { start_time: null, end_time: null }
   selectedEvtIdx.value = -1
   selectedFields.value = []
   fieldSearch.value = ''
@@ -73,6 +75,7 @@ watch(selectedSvcIdx, () => {
 
 watch(selectedEvtIdx, () => {
   if (applyingPrefill) return
+  prefillRange.value = { start_time: null, end_time: null }
   fieldSearch.value = ''
   selectedFields.value = []
   emit('clear')
@@ -111,11 +114,16 @@ function applyPrefill(pf) {
   selectedSvcIdx.value = svcIdx
 
   const svcEvents = services.value[svcIdx]?.events || []
-  const wantedEventId = Number(pf.event_id)
-  const evtIdx = svcEvents.findIndex(e => {
-    const eventId = Number(e.event_id)
-    return eventId === wantedEventId || (eventId & 0x7fff) === (wantedEventId & 0x7fff)
-  })
+  // 没有 Event ID 时只定位 Service，不能把 null 当作数值 0。
+  const wantedEventId = pf.event_id == null || pf.event_id === ''
+    ? null
+    : Number(pf.event_id)
+  const evtIdx = Number.isInteger(wantedEventId)
+    ? svcEvents.findIndex(e => {
+      const eventId = Number(e.event_id)
+      return eventId === wantedEventId || (eventId & 0x7fff) === (wantedEventId & 0x7fff)
+    })
+    : -1
 
   selectedEvtIdx.value = evtIdx
   const evtFields = evtIdx >= 0 ? (svcEvents[evtIdx]?.fields || []) : []
@@ -124,6 +132,10 @@ function applyPrefill(pf) {
     .map(v => v.trim())
     .filter(v => evtFields.includes(v))
   selectedFields.value = requestedFields
+  prefillRange.value = {
+    start_time: finiteOrNull(pf.start_time),
+    end_time: finiteOrNull(pf.end_time),
+  }
   fieldSearch.value = ''
 
   nextTick(() => {
@@ -170,7 +182,15 @@ function doGenerate() {
     event_label: eventLabel(selectedEvent.value),
     field_path: selectedFields.value.join(','),
     field_count: selectedFields.value.length,
+    start_time: prefillRange.value.start_time,
+    end_time: prefillRange.value.end_time,
   })
+}
+
+function finiteOrNull(value) {
+  if (value == null || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function onDocumentPointerDown(event) {

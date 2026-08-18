@@ -1,9 +1,10 @@
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
 import { fetchSubscriptionReport } from '../api'
 
 const props = defineProps({
   sessionId: { type: String, required: true },
+  focus: { type: Object, default: null },
 })
 const emit = defineEmits(['jump-signal'])
 
@@ -11,10 +12,17 @@ const loading = ref(false)
 const report = ref(null)
 const activeFilter = ref('all')
 const expandedServices = ref(new Set())
+const focusedServiceId = ref(null)
+const focusedEventgroupId = ref(null)
+const serviceList = ref(null)
 
 watch(() => props.sessionId, (sid) => {
   if (sid) loadReport()
 }, { immediate: true })
+
+watch([() => props.focus, report], ([focus]) => {
+  if (focus && report.value) applyFocus(focus)
+}, { deep: true })
 
 async function loadReport() {
   loading.value = true
@@ -145,6 +153,36 @@ function onJump(svc, eg) {
 function uniqueFlat(values) {
   return [...new Set(values.filter(Boolean))].sort()
 }
+
+async function applyFocus(focus) {
+  const serviceId = normalizeId(focus.service_id)
+  const eventgroupId = normalizeId(focus.eventgroup_id)
+  if (serviceId == null) return
+
+  // 外部导航必须绕过当前问题过滤，否则目标 Service 可能仍被隐藏。
+  activeFilter.value = 'all'
+  focusedServiceId.value = serviceId
+  focusedEventgroupId.value = eventgroupId
+  const next = new Set(expandedServices.value)
+  next.add(serviceId)
+  expandedServices.value = next
+  await nextTick()
+  const selector = eventgroupId == null
+    ? `[data-service-id="${serviceId}"]`
+    : `[data-service-id="${serviceId}"] [data-eventgroup-id="${eventgroupId}"]`
+  serviceList.value?.querySelector(selector)?.scrollIntoView({
+    block: 'center',
+    behavior: 'smooth',
+  })
+}
+
+function normalizeId(value) {
+  if (value == null || value === '') return null
+  const parsed = typeof value === 'string' && value.toLowerCase().startsWith('0x')
+    ? Number.parseInt(value, 16)
+    : Number(value)
+  return Number.isInteger(parsed) ? parsed : null
+}
 </script>
 
 <template>
@@ -181,11 +219,17 @@ function uniqueFlat(values) {
       <span>显示 {{ filteredServices.length }} / {{ enhancedServices.length }} 个 Service</span>
     </div>
 
-    <main class="service-list">
+    <main class="service-list" ref="serviceList">
       <div v-if="loading" class="empty">正在生成诊断报告...</div>
       <div v-else-if="!filteredServices.length" class="empty">无匹配诊断数据</div>
 
-      <article v-for="svc in filteredServices" :key="svc.service_id" class="service-card" :class="statusClass(svc)">
+      <article
+        v-for="svc in filteredServices"
+        :key="svc.service_id"
+        class="service-card"
+        :class="[statusClass(svc), { 'is-focused': focusedServiceId === svc.service_id }]"
+        :data-service-id="svc.service_id"
+      >
         <button class="service-head" :aria-expanded="isExpanded(svc.service_id)" @click="toggleService(svc.service_id)">
           <span class="expand-mark">{{ isExpanded(svc.service_id) ? '-' : '+' }}</span>
           <span class="svc-main">
@@ -238,7 +282,15 @@ function uniqueFlat(values) {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="eg in svc.eventgroups" :key="eg.eventgroup_id" :class="{ 'eg-error': eg.issues.length }">
+              <tr
+                v-for="eg in svc.eventgroups"
+                :key="eg.eventgroup_id"
+                :data-eventgroup-id="eg.eventgroup_id"
+                :class="{
+                  'eg-error': eg.issues.length,
+                  'is-focused': focusedServiceId === svc.service_id && focusedEventgroupId === eg.eventgroup_id,
+                }"
+              >
                 <td class="mono"><span class="eg-chip">{{ fmtEg(eg) }}</span></td>
                 <td class="mono event-cell" :class="{ clickable: Number(eg.notification_count || 0) > 0 }" @click.stop="onJump(svc, eg)">
                   {{ fmtEvt(eg) }}
@@ -305,6 +357,7 @@ function uniqueFlat(values) {
 .service-card.status-danger { border-color: var(--danger-border); }
 .service-card.status-warning { border-color: var(--warning-border); }
 .service-card.status-ok { border-color: var(--success-border); }
+.service-card.is-focused { box-shadow: 0 0 0 2px var(--accent-border); }
 .service-head {
   width: 100%; min-height: 50px; display: flex; align-items: center; gap: 10px;
   padding: 10px 12px; border: none; background: var(--surface); color: var(--text-primary); cursor: pointer; text-align: left;
@@ -357,6 +410,7 @@ function uniqueFlat(values) {
 .eg-table .col-num { text-align: center; font-variant-numeric: tabular-nums; }
 .eg-table .col-issue { text-align: center; }
 .eg-error { background: var(--warning-soft); }
+.eg-table tr.is-focused { background: var(--surface-selected); box-shadow: inset 3px 0 0 var(--accent); }
 .eg-chip {
   display: inline-flex; max-width: 100%; align-items: center;
   padding: 4px 7px; border-radius: var(--radius-control); border: 1px solid var(--border-strong);

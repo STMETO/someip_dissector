@@ -86,6 +86,46 @@ export async function askAssistant(sessionId, question, conversationId = null) {
   return data
 }
 
+export async function askAssistantStream(
+  sessionId,
+  question,
+  conversationId = null,
+  onEvent = () => {},
+) {
+  const response = await fetch(`/api/session/${sessionId}/assistant/chat/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question, conversation_id: conversationId }),
+  })
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}))
+    throw new Error(body.detail || `问答请求失败 (${response.status})`)
+  }
+  if (!response.body) throw new Error('浏览器不支持流式响应')
+
+  // NDJSON 可能在任意字节位置分段，因此保留半行到下一次读取继续拼接。
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+  let finalResult = null
+  while (true) {
+    const { value, done } = await reader.read()
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
+    const lines = buffer.split('\n')
+    buffer = done ? '' : lines.pop()
+    for (const line of lines) {
+      if (!line.trim()) continue
+      const event = JSON.parse(line)
+      if (event.type === 'error') throw new Error(event.message || 'AI 助手处理失败')
+      if (event.type === 'result') finalResult = event.result
+      onEvent(event)
+    }
+    if (done) break
+  }
+  if (!finalResult) throw new Error('模型请求结束但没有返回回答')
+  return finalResult
+}
+
 export function exportUrl(sessionId, filename) {
   return `/api/export/${sessionId}/${filename}`
 }

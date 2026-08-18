@@ -9,6 +9,7 @@ const props = defineProps({
   prefill: { type: Object, default: null },
   theme: { type: String, default: 'light' },
 })
+const emit = defineEmits(['navigate-message'])
 
 const meta = ref([])
 const loading = ref(false)
@@ -79,9 +80,10 @@ function onClear() {
 }
 
 function onPointClick(point) {
-  // 这里先把点击点保留在父组件边界内；后续如需联动报文列表，
-  // 只需要在 App 层增加 frame_index -> message index 的映射。
   selectInfo.value = { ...(selectInfo.value || {}), active_frame: point.frame_index }
+  if (point.message_index != null) {
+    emit('navigate-message', { message_index: point.message_index })
+  }
 }
 </script>
 
@@ -118,6 +120,10 @@ function onPointClick(point) {
           :loading="loading"
           :errorText="errorText"
           :theme="theme"
+          :timeRange="{
+            start_time: selectInfo?.start_time,
+            end_time: selectInfo?.end_time,
+          }"
           @point-click="onPointClick"
         />
       </div>

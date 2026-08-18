@@ -122,6 +122,19 @@ function statusClass(s) {
 function resolvedCount(messages) {
   return (messages || []).filter(m => m.parse_status !== 'unresolved').length
 }
+
+async function revealMessage(messageIndex) {
+  // AI 证据跳转时先定位过滤结果中的页码，再把目标行滚动到可视区域。
+  const index = filtered.value.findIndex(item => Number(item.index) === Number(messageIndex))
+  if (index < 0) return false
+  currentPage.value = Math.floor(index / pageSize) + 1
+  await nextTick()
+  const row = tableWrap.value?.querySelector(`[data-message-index="${Number(messageIndex)}"]`)
+  row?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  return true
+}
+
+defineExpose({ revealMessage })
 </script>
 
 <template>
@@ -161,6 +174,7 @@ function resolvedCount(messages) {
           <tr v-if="loading"><td colspan="9" class="empty">解析中...</td></tr>
           <tr v-else-if="!paged.length"><td colspan="9" class="empty">无匹配结果</td></tr>
           <tr v-for="m in paged" :key="m.index"
+              :data-message-index="m.index"
               :class="{ selected: m.index === selectedIndex }"
               class="msg-row"
               @click="emit('select', m)">

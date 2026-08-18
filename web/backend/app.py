@@ -11,7 +11,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
@@ -20,6 +20,7 @@ from assistant import (
     AssistantConfigRequest,
     AssistantError,
     chat as assistant_chat,
+    chat_stream as assistant_chat_stream,
     clear_all_conversations,
     clear_conversations,
     configure as configure_assistant,
@@ -72,6 +73,26 @@ async def upload(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"解析失败: {exc}") from exc
     return JSONResponse(result)
+
+
+@app.post("/api/session/{session_id}/assistant/chat/stream")
+async def stream_assistant(
+    session_id: str,
+    request: AssistantChatRequest,
+) -> StreamingResponse:
+    """按 NDJSON 输出模型状态、Tool 进度和最终回答。"""
+    return StreamingResponse(
+        assistant_chat_stream(
+            session_id,
+            request.question,
+            request.conversation_id,
+        ),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @app.get("/api/sessions")

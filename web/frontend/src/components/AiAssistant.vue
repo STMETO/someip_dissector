@@ -2,7 +2,7 @@
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { askAssistant, configureAssistant, fetchAssistantStatus } from '../api'
+import { askAssistantStream, configureAssistant, fetchAssistantStatus } from '../api'
 
 const DEFAULT_DRAWER_WIDTH = 440
 const MIN_DRAWER_WIDTH = 360
@@ -15,7 +15,13 @@ const props = defineProps({
   pcapName: { type: String, default: '' },
 })
 
-const emit = defineEmits(['update:open'])
+const emit = defineEmits([
+  'update:open',
+  'navigate-message',
+  'navigate-service',
+  'navigate-eventgroup',
+  'navigate-signal',
+])
 
 const status = ref({ configured: false, api_base: '', model: '', source: 'none' })
 const statusLoading = ref(false)
@@ -29,6 +35,8 @@ const conversationId = ref(null)
 const draft = ref('')
 const sending = ref(false)
 const chatError = ref('')
+const progressEvents = ref([])
+const progressMessage = ref('')
 const messageList = ref(null)
 const drawerWidth = ref(DEFAULT_DRAWER_WIDTH)
 const resizing = ref(false)
@@ -51,6 +59,8 @@ watch(() => props.sessionId, () => {
   conversationId.value = null
   draft.value = ''
   chatError.value = ''
+  progressEvents.value = []
+  progressMessage.value = ''
 })
 
 onMounted(() => {
@@ -109,10 +119,18 @@ async function submitQuestion(value = draft.value) {
   draft.value = ''
   sending.value = true
   chatError.value = ''
+  // 每个问题独立显示进度，避免上一轮 Tool 状态残留造成误解。
+  progressEvents.value = []
+  progressMessage.value = '正在分析问题'
   await scrollToLatest()
 
   try {
-    const result = await askAssistant(props.sessionId, question, conversationId.value)
+    const result = await askAssistantStream(
+      props.sessionId,
+      question,
+      conversationId.value,
+      onProgressEvent,
+    )
     conversationId.value = result.conversation_id
     messages.value.push({
       role: 'assistant',
@@ -125,8 +143,97 @@ async function submitQuestion(value = draft.value) {
     chatError.value = apiError(error, '问答请求失败')
   } finally {
     sending.value = false
+    progressMessage.value = ''
     await scrollToLatest()
   }
+}
+
+function onProgressEvent(event) {
+  if (event.type === 'status') {
+    progressMessage.value = event.message || '正在分析问题'
+    return
+  }
+  if (event.type === 'tool_start') {
+    progressMessage.value = event.message || `正在调用 ${event.name}`
+    progressEvents.value = [
+      ...progressEvents.value,
+      { name: event.name, message: progressMessage.value, status: 'running' },
+    ]
+    return
+  }
+  if (event.type === 'tool_end') {
+    // 同一 Tool 可能被模型调用多次，只结束最近一条仍在运行的记录。
+    const next = [...progressEvents.value]
+    for (let index = next.length - 1; index >= 0; index -= 1) {
+      if (next[index].name !== event.name || next[index].status !== 'running') continue
+      next[index] = {
+        ...next[index],
+        message: event.message,
+        status: event.ok ? 'done' : 'error',
+      }
+      break
+    }
+    progressEvents.value = next
+    progressMessage.value = '正在整理查询结果'
+  }
+}
+
+function onToolLink(link) {
+  if (!link?.kind) return
+  emit(`navigate-${link.kind}`, link)
+}
+
+function onEvidenceClick(event) {
+  const anchor = event.target.closest?.('a')
+  const href = anchor?.getAttribute('href') || ''
+  if (!href.startsWith('#someip-')) return
+  const navigation = parseEvidenceHref(href)
+  if (!navigation) return
+  event.preventDefault()
+  onToolLink(navigation)
+}
+
+function parseEvidenceHref(href) {
+  let match = href.match(/^#someip-message-(\d+)$/i)
+  if (match) return { kind: 'message', message_index: Number(match[1]) }
+
+  match = href.match(/^#someip-service-(0x[0-9a-f]+|\d+)$/i)
+  if (match) return { kind: 'service', service_id: parseProtocolId(match[1]) }
+
+  match = href.match(/^#someip-eventgroup-(0x[0-9a-f]+|\d+)-(0x[0-9a-f]+|\d+)$/i)
+  if (match) {
+    return {
+      kind: 'eventgroup',
+      service_id: parseProtocolId(match[1]),
+      eventgroup_id: parseProtocolId(match[2]),
+    }
+  }
+
+  if (href.startsWith('#someip-signal?')) {
+    const params = new URLSearchParams(href.slice(href.indexOf('?') + 1))
+    return {
+      kind: 'signal',
+      service_id: parseProtocolId(params.get('service')),
+      event_id: parseProtocolId(params.get('event')),
+      field_path: params.get('field') || null,
+      start_time: finiteOrNull(params.get('start')),
+      end_time: finiteOrNull(params.get('end')),
+    }
+  }
+  return null
+}
+
+function parseProtocolId(value) {
+  if (value == null || value === '') return null
+  return String(value).toLowerCase().startsWith('0x')
+    ? Number.parseInt(value, 16)
+    : Number.parseInt(value, 10)
+}
+
+function finiteOrNull(value) {
+  if (value == null || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function onComposerKeydown(event) {
@@ -345,16 +452,35 @@ function apiError(error, fallback) {
               v-if="message.role === 'assistant'"
               class="message-content markdown-body"
               v-html="message.renderedContent"
+              @click="onEvidenceClick"
             ></div>
             <div v-else class="message-content user-content">{{ message.content }}</div>
-            <footer v-if="message.tools?.length">
-              调用工具：{{ message.tools.map(tool => tool.name).join(', ') }}
+            <footer v-if="message.tools?.length" class="tool-evidence">
+              <span>调用工具：{{ message.tools.map(tool => tool.name).join(', ') }}</span>
+              <div v-if="message.tools.some(tool => tool.links?.length)" class="evidence-links">
+                <button
+                  v-for="(link, linkIndex) in message.tools.flatMap(tool => tool.links || [])"
+                  :key="`${link.kind}-${link.message_index ?? link.service_id}-${link.eventgroup_id ?? linkIndex}`"
+                  type="button"
+                  @click="onToolLink(link)"
+                >{{ link.label }}</button>
+              </div>
             </footer>
           </article>
 
           <article v-if="sending" class="chat-message is-assistant is-loading" aria-label="AI 正在分析">
             <span class="message-role">AI 助手</span>
-            <div class="loading-lines"><i></i><i></i><i></i></div>
+            <div class="assistant-progress">
+              <strong>{{ progressMessage || '正在分析问题' }}</strong>
+              <div v-if="progressEvents.length" class="progress-steps">
+                <span
+                  v-for="(item, index) in progressEvents"
+                  :key="`${item.name}-${index}`"
+                  :class="`is-${item.status}`"
+                >{{ item.message }}</span>
+              </div>
+              <div v-else class="loading-lines"><i></i><i></i><i></i></div>
+            </div>
           </article>
 
           <p v-if="chatError" class="chat-error" role="alert">{{ chatError }}</p>
@@ -786,7 +912,58 @@ body.assistant-is-resizing {
   font-family: var(--font-mono);
   font-size: 9px;
 }
+.tool-evidence > span { display: block; }
+.evidence-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+.evidence-links button {
+  min-height: 25px;
+  padding: 3px 7px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-control);
+  background: var(--accent-soft);
+  color: var(--accent);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 800;
+}
+.evidence-links button:hover { border-color: var(--accent); background: var(--surface-selected); }
 .is-loading { width: 62%; }
+.assistant-progress {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+}
+.assistant-progress > strong {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.progress-steps { display: grid; gap: 5px; margin-top: 8px; }
+.progress-steps span {
+  padding-left: 13px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  position: relative;
+}
+.progress-steps span::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  width: 6px;
+  height: 6px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+.progress-steps .is-running { color: var(--accent); }
+.progress-steps .is-done { color: var(--success); }
+.progress-steps .is-error { color: var(--danger); }
 .loading-lines {
   display: grid;
   gap: 6px;

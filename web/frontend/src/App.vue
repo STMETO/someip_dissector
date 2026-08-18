@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, reactive, onMounted, onUnmounted, watch } from 'vue'
+import { computed, nextTick, ref, reactive, onMounted, onUnmounted, watch } from 'vue'
 import UploadBar from './components/UploadBar.vue'
 import AiAssistant from './components/AiAssistant.vue'
 import SessionSwitcher from './components/SessionSwitcher.vue'
@@ -33,6 +33,9 @@ const currentTab = ref('parse')  // 'parse' | 'signal' | 'subscription'
 const signalPrefill = ref(null) // 从诊断页跳转时预填参数
 const theme = ref(_loadTheme())
 const assistantOpen = ref(false)
+const messageTableRef = ref(null)
+const subscriptionFocus = ref(null)
+let navigationToken = 0
 let activationRequestId = 0
 
 const activePcapName = computed(() => (
@@ -58,7 +61,11 @@ watch(theme, (value) => {
 }, { immediate: true })
 
 // 切换会话时回到解析页
-watch(sessionId, () => { currentTab.value = 'parse'; signalPrefill.value = null })
+watch(sessionId, () => {
+  currentTab.value = 'parse'
+  signalPrefill.value = null
+  subscriptionFocus.value = null
+})
 
 // 解析新文件可能耗时较长。记录上传开始时所在的会话，避免用户
 // 在解析期间切到旧记录后，又被上传完成事件强制切回新记录。
@@ -74,8 +81,58 @@ onMounted(() => {
 })
 
 function onJumpToSignal(params) {
-  signalPrefill.value = params
+  signalPrefill.value = { ...params, navigation_token: ++navigationToken }
   currentTab.value = 'signal'
+}
+
+async function onNavigateMessage(link) {
+  const index = Number(link?.message_index)
+  if (!Number.isInteger(index)) return
+  currentTab.value = 'parse'
+  searchText.value = ''
+  await nextTick()
+  const summaryRow = messages.value.find(item => Number(item.index) === index)
+  if (!summaryRow) return
+  await messageTableRef.value?.revealMessage(index)
+  await onSelect(summaryRow)
+}
+
+function onNavigateService(link) {
+  const serviceId = Number(link?.service_id)
+  if (!Number.isInteger(serviceId)) return
+  subscriptionFocus.value = {
+    service_id: serviceId,
+    navigation_token: ++navigationToken,
+  }
+  currentTab.value = 'subscription'
+}
+
+function onNavigateEventgroup(link) {
+  const serviceId = Number(link?.service_id)
+  const eventgroupId = Number(link?.eventgroup_id)
+  if (!Number.isInteger(serviceId) || !Number.isInteger(eventgroupId)) return
+  subscriptionFocus.value = {
+    service_id: serviceId,
+    eventgroup_id: eventgroupId,
+    navigation_token: ++navigationToken,
+  }
+  currentTab.value = 'subscription'
+}
+
+function onNavigateSignal(link) {
+  const serviceId = Number(link?.service_id)
+  if (!Number.isInteger(serviceId)) return
+  // 空值不能直接交给 Number；Number(null) 会得到 0，进而误选 Event 0。
+  const eventId = link?.event_id == null || link.event_id === ''
+    ? null
+    : Number(link.event_id)
+  onJumpToSignal({
+    service_id: serviceId,
+    event_id: Number.isInteger(eventId) ? eventId : null,
+    field_path: link?.field_path || '',
+    start_time: link?.start_time,
+    end_time: link?.end_time,
+  })
 }
 
 // 分割条位置 (左栏百分比)
@@ -365,7 +422,7 @@ function _formatDuration(ms) {
     <!-- 报文解析视图 -->
     <div class="workspace" v-show="sessionId && currentTab === 'parse'">
       <div class="pane pane-left" :style="{ width: splitPercent + '%' }">
-        <MessageTable :messages="messages" :loading="loading"
+        <MessageTable ref="messageTableRef" :messages="messages" :loading="loading"
                       :selectedIndex="selectedMsg?.index"
                       v-model:searchText="searchText"
                       @select="onSelect" />
@@ -379,16 +436,29 @@ function _formatDuration(ms) {
     </div>
     <!-- 信号时序视图 -->
     <div class="workspace" v-show="sessionId && currentTab === 'signal'">
-      <SignalTiming :sessionId="sessionId" :prefill="signalPrefill" :theme="theme" />
+      <SignalTiming
+        :sessionId="sessionId"
+        :prefill="signalPrefill"
+        :theme="theme"
+        @navigate-message="onNavigateMessage"
+      />
     </div>
     <!-- 订阅诊断视图 -->
     <div class="workspace" v-show="sessionId && currentTab === 'subscription'">
-      <SubscriptionReport :sessionId="sessionId" @jump-signal="onJumpToSignal" />
+      <SubscriptionReport
+        :sessionId="sessionId"
+        :focus="subscriptionFocus"
+        @jump-signal="onJumpToSignal"
+      />
     </div>
     <AiAssistant
       v-model:open="assistantOpen"
       :sessionId="sessionId"
       :pcapName="activePcapName"
+      @navigate-message="onNavigateMessage"
+      @navigate-service="onNavigateService"
+      @navigate-eventgroup="onNavigateEventgroup"
+      @navigate-signal="onNavigateSignal"
     />
     <Teleport to="body">
       <div v-if="pendingDeleteSession" class="confirm-layer" role="presentation">

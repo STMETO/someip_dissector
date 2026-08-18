@@ -273,6 +273,7 @@ python run.py web
 assistant/
 ├── __init__.py
 ├── config.py
+├── navigation.py
 ├── provider.py
 ├── schemas.py
 ├── service.py
@@ -293,6 +294,7 @@ assistant/
 |------------|------|
 | `assistant/__init__.py` | 稳定的包入口，供 FastAPI 导入助手服务，不暴露内部实现细节 |
 | `assistant/config.py` | 合并页面运行时配置、环境变量和默认值；API Key 仅驻留当前进程内存 |
+| `assistant/navigation.py` | 从 Tool 结构化结果提取报文、Service、EventGroup 和信号时序导航参数 |
 | `assistant/provider.py` | 构造 OpenAI-compatible Chat Completions 请求并统一转换连接错误 |
 | `assistant/schemas.py` | 校验模型配置和对话请求长度、类型等 API 边界 |
 | `assistant/service.py` | 绑定解析会话与对话历史，注入系统提示词，循环处理模型 Tool Calling |
@@ -304,7 +306,7 @@ assistant/
 
 ```text
 AiAssistant.vue
-  -> POST /api/session/{session_id}/assistant/chat
+  -> POST /api/session/{session_id}/assistant/chat/stream（NDJSON 进度事件）
     -> assistant.service.chat
       -> assistant.provider.create_chat_completion
         -> 模型选择 Tool 并填写参数
@@ -312,7 +314,14 @@ AiAssistant.vue
         -> analysis.queries.SessionQueries（会话级只读索引）
           -> session messages / SD records / ServiceRegistry
       -> 模型根据 Tool 证据生成 Markdown 回答
+      -> assistant.navigation.collect_navigation_links
+        -> 前端证据按钮跳转报文树、订阅诊断或信号时序
 ```
+
+Tool 执行期间会实时显示查询阶段。最终回答中的稳定 Markdown 锚点以及 Tool
+返回的结构化证据按钮都支持联动：报文证据打开对应消息与解析树，Service 和
+EventGroup 打开订阅诊断并定位目标，带时间范围的信号证据打开时序图并缩放。
+原同步 `/assistant/chat` 接口仍保留，用于兼容已有调用方。
 
 ### 命令行调试
 
