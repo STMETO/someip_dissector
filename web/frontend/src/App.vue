@@ -47,6 +47,7 @@ const timingOverview = computed(() => {
     pcap: _formatDuration(t.pcap_parse_ms),
     deserialize: _formatDuration(t.payload_deserialize_ms),
     render: _formatDuration(t.frontend_render_ms),
+    queryIndex: _formatDuration(t.query_index_ms || t.query_index_restore_ms),
   }
 })
 
@@ -358,6 +359,7 @@ function _formatDuration(ms) {
         <span class="overview-pill">PCAP {{ timingOverview.pcap }}</span>
         <span class="overview-pill">反序列化 {{ timingOverview.deserialize }}</span>
         <span class="overview-pill">树形渲染 {{ timingOverview.render }}</span>
+        <span class="overview-pill">查询索引 {{ timingOverview.queryIndex }}</span>
       </section>
     </section>
     <!-- 报文解析视图 -->

@@ -210,7 +210,15 @@ function maxDrawerWidth() {
 }
 
 function apiError(error, fallback) {
-  return error?.response?.data?.detail || error?.message || fallback
+  const detail = error?.response?.data?.detail
+  if (typeof detail === 'string' && detail.trim()) return detail
+  if (Array.isArray(detail)) {
+    return detail.map(item => item?.msg || String(item)).join('；')
+  }
+  if (typeof error?.response?.data === 'string' && error.response.data.trim()) {
+    return error.response.data
+  }
+  return error?.message || fallback
 }
 </script>
 

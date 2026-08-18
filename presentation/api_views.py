@@ -9,7 +9,7 @@ those messages into the shapes consumed by Vue:
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Sequence
 
 from pcap_parsers.common import (
     EVENT_ID_MASK,
@@ -36,7 +36,7 @@ def render_messages_for_frontend(messages: list[dict[str, Any]]) -> list[dict[st
 
 
 def build_message_summaries(
-    messages: list[dict[str, Any]],
+    messages: Sequence[dict[str, Any]],
     registry: Any = None,
 ) -> list[dict[str, Any]]:
     """Build compact rows for the frontend message table."""
@@ -65,25 +65,30 @@ def build_message_detail(messages: list[dict[str, Any]], index: int) -> dict | N
     """Return the full frontend detail object for a selected message index."""
     for m in messages:
         if m["index"] == index:
-            return {
-                "index": m["index"],
-                "frame_index": m["frame_index"],
-                "timestamp_epoch": m.get("timestamp_epoch", 0.0),
-                "timestamp_iso": m.get("timestamp_iso", ""),
-                "service_id": m["header"]["service_id"]["hex"],
-                "method_id": m["header"]["method_id"]["hex"],
-                "message_type": m["header"]["message_type"]["hex"],
-                "message_type_name": precise_message_type_name(m),
-                "message_kind": m.get("message_kind", "?"),
-                "transport": m["transport"],
-                "payload_length": m["payload_length"],
-                "payload_hex": m["payload_hex"],
-                "raw_header_hex": m["raw_header_hex"],
-                "parse_status": m.get("parse_status", "unresolved"),
-                "parsed": m.get("parsed"),
-                "raw_view": m.get("raw_view"),
-            }
+            return build_message_detail_from_message(m)
     return None
+
+
+def build_message_detail_from_message(message: dict[str, Any]) -> dict[str, Any]:
+    """把统一查询层已定位的单条消息转换为前端详情结构。"""
+    return {
+        "index": message["index"],
+        "frame_index": message["frame_index"],
+        "timestamp_epoch": message.get("timestamp_epoch", 0.0),
+        "timestamp_iso": message.get("timestamp_iso", ""),
+        "service_id": message["header"]["service_id"]["hex"],
+        "method_id": message["header"]["method_id"]["hex"],
+        "message_type": message["header"]["message_type"]["hex"],
+        "message_type_name": precise_message_type_name(message),
+        "message_kind": message.get("message_kind", "?"),
+        "transport": message["transport"],
+        "payload_length": message["payload_length"],
+        "payload_hex": message["payload_hex"],
+        "raw_header_hex": message["raw_header_hex"],
+        "parse_status": message.get("parse_status", "unresolved"),
+        "parsed": message.get("parsed"),
+        "raw_view": message.get("raw_view"),
+    }
 
 
 def resolve_message_kind(msg: dict[str, Any]) -> str:

@@ -84,7 +84,9 @@ someip_dissector/
 │       ├── offer_timeline.py           # Offer / StopOffer 生命周期时间线
 │       ├── subscription_timeline.py    # Subscribe / Ack / Nack / Notification 时间线
 │       ├── search_messages.py          # 按协议字段、IP 和时间范围检索报文
-│       └── message_detail.py           # 查询单条报文 Header、SD 和 Payload 解析树
+│       ├── message_detail.py           # 查询单条报文 Header、SD 和 Payload 解析树
+│       ├── notification_statistics.py  # Notification 间隔与信号字段统计
+│       └── payload_field.py             # 按字段路径读取单个深层 Payload 节点
 │
 ├── core/                               # 全链路解析编排层（不依赖 Web）
 │   └── pipeline.py                     # ARXML 编译 → PCAP 解析 → Payload 反序列化
@@ -109,7 +111,16 @@ someip_dissector/
 │
 ├── analysis/                           # 信号分析模块
 │   ├── signal_utils.py                 # 字段提取 + 跳变检测
-│   └── sd_diagnostic.py                # SD 订阅诊断（Offer→Subscribe→Notify 链路）
+│   ├── sd_diagnostic.py                # SD 订阅诊断（Offer→Subscribe→Notify 链路）
+│   └── queries/                        # 页面 API 与 AI 共用的会话级查询层
+│       ├── __init__.py                 # SessionQueries 聚合入口和兼容补建
+│       ├── evidence.py                 # Header 真值、时间过滤和报文证据
+│       ├── message_query.py            # 消息只读索引与组合检索
+│       ├── sd_query.py                 # SD Entry 分类和 Service 索引
+│       ├── service_query.py            # ARXML/抓包/诊断服务查询
+│       ├── offer_query.py              # Offer 生命周期查询
+│       ├── subscription_query.py       # 订阅报告和生命周期查询
+│       └── signal_query.py             # Notification、曲线与 Payload 字段查询
 │
 ├── utils/                              # 工具模块
 │   └── logger.py                       # 统一日志：控制台 + RotatingFileHandler
@@ -168,7 +179,7 @@ someip_dissector/
 `field_node.py` → `engine.py`
 
 ### analysis
-`signal_utils.py` → `sd_diagnostic.py`
+`signal_utils.py` → `sd_diagnostic.py` → `queries/__init__.py` → 各领域 Query
 
 ### assistant
 `config.py` → `provider.py` → `service.py` → `tools/__init__.py` → 各 Tool 文件
@@ -226,7 +237,7 @@ python run.py web
 ### AI 分析助手（MVP）
 
 页面右上角的 `AI 助手` 会打开当前解析会话的侧边问答面板。面板左边缘可以
-拖动调节宽度，回答按经过安全清理的 GFM Markdown 渲染。当前提供六个只读 Tool：
+拖动调节宽度，回答按经过安全清理的 GFM Markdown 渲染。当前提供八个只读 Tool：
 
 | Tool | 作用 |
 |------|------|
@@ -236,6 +247,8 @@ python run.py web
 | `get_subscription_timeline` | 查询 Subscribe、Ack、Nack 和关联 Notification 时间线 |
 | `search_messages` | 按服务、方法、报文类型、IP、SD Entry 和时间范围过滤报文 |
 | `get_message_detail` | 读取指定报文的 Header、SD、Payload 和反序列化树 |
+| `get_notification_statistics` | 统计 Notification 数量、间隔、端点和可选信号字段 |
+| `get_payload_field` | 按报文索引和字段路径读取单个深层 Payload 节点 |
 
 页面默认填充 DeepSeek 官方 OpenAI-compatible 地址和 `deepseek-v4-flash` 模型。
 不同服务商签发的 API Key 不通用，切换服务商时必须同时检查 API Key、API 地址
@@ -271,7 +284,9 @@ assistant/
     ├── offer_timeline.py
     ├── subscription_timeline.py
     ├── search_messages.py
-    └── message_detail.py
+    ├── message_detail.py
+    ├── notification_statistics.py
+    └── payload_field.py
 ```
 
 | 文件或目录 | 职责 |
@@ -294,7 +309,8 @@ AiAssistant.vue
       -> assistant.provider.create_chat_completion
         -> 模型选择 Tool 并填写参数
       -> assistant.tools.execute_tool（白名单分发）
-        -> analysis / session messages / ServiceRegistry
+        -> analysis.queries.SessionQueries（会话级只读索引）
+          -> session messages / SD records / ServiceRegistry
       -> 模型根据 Tool 证据生成 Markdown 回答
 ```
 

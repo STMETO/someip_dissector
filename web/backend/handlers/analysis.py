@@ -1,14 +1,7 @@
-"""Web session adapter for the SOME/IP parsing pipeline.
+"""SOME/IP 解析流水线的 Web 会话适配层。
 
-This module should stay thin:
-
-- receive uploaded files through FastAPI types
-- call ``core.pipeline`` for parsing work
-- call ``presentation`` for frontend response shapes
-- keep in-memory session state for subsequent API calls
-
-Parser construction, ARXML compilation, and payload deserialization deliberately
-live outside this module.
+本模块只接收上传文件、调用核心解析、保存会话状态并管理持久化文件；协议解析、
+ARXML 编译和 Payload 反序列化均位于独立模块中，避免业务逻辑依赖 FastAPI。
 """
 from __future__ import annotations
 
@@ -18,16 +11,16 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from fastapi import UploadFile
 from starlette.concurrency import run_in_threadpool
 
+from analysis.queries import SessionQueries
 from arxml_parsers import ArxmlParser, ServiceRegistry
 from core.pipeline import run_parse_pipeline, save_pipeline_exports
 from presentation import (
-    build_message_detail,
-    build_message_summaries,
     render_messages_for_frontend,
 )
 from web.backend.handlers.upload import cleanup_session, validate_and_save
@@ -42,13 +35,14 @@ logger = get_logger(__name__)
 
 @dataclass
 class _SessionState:
-    """Cached data for one Web upload/parse session."""
+    """一组 Web 上传解析记录的内存状态。"""
 
     session_id: str
     session_dir: Path
     messages: list[dict[str, Any]]
-    pipeline_result: Any = None  # In-memory parse artifacts, used for later persistence.
-    registry: Any = None          # ServiceRegistry, used by diagnostics.
+    pipeline_result: Any = None  # 完整 pipeline 产物，供后续持久化使用。
+    registry: Any = None         # ARXML ServiceRegistry，供名称解析使用。
+    queries: SessionQueries | None = None  # 页面 API 与 AI Tool 共用的只读查询索引。
     total_messages: int = 0
     parsed_count: int = 0
     keep_temp: bool = True
@@ -60,10 +54,12 @@ class _SessionState:
 
 
 _sessions: dict[str, _SessionState] = {}
+_session_load_locks: dict[str, Lock] = {}
+_session_load_locks_guard = Lock()
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Upload + parse entry
+# 上传与解析入口
 # ═══════════════════════════════════════════════════════════════════
 
 async def run_upload_and_parse(
@@ -71,7 +67,7 @@ async def run_upload_and_parse(
     arxml_file: UploadFile,
     keep_temp: bool = False,
 ) -> dict[str, Any]:
-    """Save uploaded files, run the core pipeline, and cache frontend messages."""
+    """保存上传文件、执行核心流水线并缓存前端消息。"""
     persistent = bool(keep_temp)
     pcap_name = pcap_file.filename or "capture.pcap"
     arxml_name = arxml_file.filename or "schema.arxml"
@@ -79,10 +75,9 @@ async def run_upload_and_parse(
         pcap_file, arxml_file, keep_temp)
     session_dir = pcap_path.parent
 
-    # Parsing and export serialization are CPU/disk heavy. Run them outside the
-    # FastAPI event loop so already parsed sessions can still be browsed while a
-    # new upload is being processed.
-    pipeline_result, messages, timings = await run_in_threadpool(
+    # 解析和 JSON 序列化均较耗时，放在线程池中避免阻塞 FastAPI 事件循环，
+    # 保证上传新文件时仍可浏览已经完成的会话。
+    pipeline_result, messages, queries, timings = await run_in_threadpool(
         _parse_and_render_session,
         pcap_path,
         arxml_path,
@@ -96,6 +91,7 @@ async def run_upload_and_parse(
         messages=messages,
         pipeline_result=pipeline_result,
         registry=pipeline_result.registry,
+        queries=queries,
         total_messages=len(messages),
         parsed_count=pipeline_result.parsed_count,
         keep_temp=True,
@@ -121,15 +117,33 @@ async def run_upload_and_parse(
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Session / export helpers
+# 会话与导出辅助函数
 # ═══════════════════════════════════════════════════════════════════
 
 def get_session(session_id: str) -> _SessionState | None:
-    return _sessions.get(session_id) or _load_session_from_disk(session_id)
+    """读取内存会话，必要时只执行一次磁盘恢复。
+
+    页面进入时会并发请求消息、诊断和信号数据。按 Session ID 加锁可避免三个
+    线程同时反序列化同一份大型 JSON，同时不同会话仍可并行恢复。
+    """
+    state = _sessions.get(session_id)
+    if state is not None:
+        return state
+
+    with _session_load_locks_guard:
+        load_lock = _session_load_locks.setdefault(session_id, Lock())
+    with load_lock:
+        state = _sessions.get(session_id)
+        if state is not None:
+            return state
+        state = _load_session_from_disk(session_id)
+        if state is not None:
+            _sessions[session_id] = state
+        return state
 
 
 def list_sessions() -> list[dict[str, Any]]:
-    """Return sessions kept for the currently running Web UI."""
+    """返回当前 Web 进程可访问的内存会话和持久化会话。"""
     rows = [session_summary(state) for state in _sessions.values()]
     seen = {row["session_id"] for row in rows}
     if _SESSIONS_ROOT.exists():
@@ -144,12 +158,16 @@ def list_sessions() -> list[dict[str, Any]]:
 
 
 def clear_session(session_id: str) -> None:
-    _sessions.pop(session_id, None)
-    cleanup_session(session_id)
+    # 与磁盘恢复使用同一把会话锁，避免删除期间被并发读取重新放回内存。
+    with _session_load_locks_guard:
+        load_lock = _session_load_locks.setdefault(session_id, Lock())
+    with load_lock:
+        _sessions.pop(session_id, None)
+        cleanup_session(session_id)
 
 
 def persist_session(session_id: str) -> dict[str, Any] | None:
-    """Persist a parsed session after the user decides it is worth keeping."""
+    """用户确认保留后，将已解析会话持久化到磁盘。"""
     state = get_session(session_id)
     if state is None:
         return None
@@ -178,12 +196,10 @@ def persist_session(session_id: str) -> dict[str, Any] | None:
 
 
 def unpersist_session(session_id: str) -> dict[str, Any] | None:
-    """Keep the parsed session in the open UI, but stop saving it to disk.
+    """取消磁盘持久化，但继续在当前 UI 的内存会话中保留解析结果。
 
-    The session remains available from ``_sessions`` until the browser closes
-    or the user explicitly deletes the local record. Removing only persistence
-    artifacts makes the frontend "Unsave" action reversible in the current UI
-    lifetime without pretending the parse record is gone.
+    浏览器关闭或用户明确删除前，会话仍可从 ``_sessions`` 读取；因此页面上的
+    “取消保存”只删除持久化产物，不会误表示整条解析记录已被删除。
     """
     state = get_session(session_id)
     if state is None:
@@ -195,11 +211,10 @@ def unpersist_session(session_id: str) -> dict[str, Any] | None:
 
 
 def clear_all_sessions(include_persistent: bool = False) -> None:
-    """Release Web sessions.
+    """释放 Web 会话。
 
-    UI close calls this with the default value: transient sessions are deleted,
-    persistent sessions are dropped from memory but their artifacts stay on
-    disk for later restoration.
+    UI 关闭时使用默认参数：临时会话会被删除，持久化会话只从内存移除，磁盘
+    产物保留供下次启动恢复。
     """
     for sid, state in list(_sessions.items()):
         if state.persistent and not include_persistent:
@@ -244,8 +259,8 @@ def _parse_and_render_session(
     arxml_path: Path,
     session_dir: Path,
     persistent: bool,
-) -> tuple[Any, list[dict[str, Any]], dict[str, float]]:
-    """Run the synchronous parse pipeline and build frontend-ready messages."""
+) -> tuple[Any, list[dict[str, Any]], SessionQueries, dict[str, float]]:
+    """同步执行解析、前端视图构建和会话查询索引构建。"""
     total_start = time.perf_counter()
     pipeline_result = run_parse_pipeline(pcap_path, arxml_path)
 
@@ -254,17 +269,23 @@ def _parse_and_render_session(
     timings = dict(pipeline_result.timings)
     timings["frontend_render_ms"] = _elapsed_ms(started)
 
+    # 查询索引与完整 JSON 相互独立，只保存消息引用和字段映射，不复制 Payload。
+    started = time.perf_counter()
+    queries = SessionQueries(messages, pipeline_result.registry)
+    timings["query_index_ms"] = _elapsed_ms(started)
+
     if persistent:
         timings.update(save_pipeline_exports(session_dir, pipeline_result, messages))
 
     timings["upload_total_ms"] = _elapsed_ms(total_start)
     pipeline_result.timings.update(timings)
     logger.info(
-        "Web render timings | frontend_render=%.1fms upload_total=%.1fms",
+        "Web render timings | frontend_render=%.1fms query_index=%.1fms upload_total=%.1fms",
         timings["frontend_render_ms"],
+        timings["query_index_ms"],
         timings["upload_total_ms"],
     )
-    return pipeline_result, messages, timings
+    return pipeline_result, messages, queries, timings
 
 
 def _save_session_meta(state: _SessionState) -> None:
@@ -274,7 +295,7 @@ def _save_session_meta(state: _SessionState) -> None:
 
 
 def _remove_persistence_artifacts(session_dir: Path) -> None:
-    """Remove files that make a session survive after the current Web UI."""
+    """删除跨进程持久化文件，但不影响当前 UI 内存中的会话。"""
     meta_path = session_dir / _SESSION_META
     if meta_path.exists():
         meta_path.unlink()
@@ -299,11 +320,17 @@ def _load_session_from_disk(session_id: str) -> _SessionState | None:
     if messages is None:
         return None
 
+    registry = _load_registry(session_dir)
+    started = time.perf_counter()
+    queries = SessionQueries(messages, registry)
+    timings = dict(meta.get("timings") or {})
+    timings["query_index_restore_ms"] = _elapsed_ms(started)
     state = _SessionState(
         session_id=session_id,
         session_dir=session_dir,
         messages=messages,
-        registry=_load_registry(session_dir),
+        registry=registry,
+        queries=queries,
         total_messages=int(meta.get("summary", {}).get("total_messages", len(messages))),
         parsed_count=int(meta.get("summary", {}).get("parsed_count", 0)),
         keep_temp=True,
@@ -311,7 +338,7 @@ def _load_session_from_disk(session_id: str) -> _SessionState | None:
         pcap_name=meta.get("pcap_name", ""),
         arxml_name=meta.get("arxml_name", ""),
         created_at=meta.get("created_at", ""),
-        timings=meta.get("timings") or {},
+        timings=timings,
     )
     _sessions[session_id] = state
     return state
@@ -403,8 +430,6 @@ def _elapsed_ms(started: float) -> float:
 
 __all__ = [
     "_sessions",
-    "build_message_detail",
-    "build_message_summaries",
     "clear_all_sessions",
     "clear_session",
     "get_export_path",

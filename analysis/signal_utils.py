@@ -40,33 +40,44 @@ def collect_leaf_paths(node: dict, prefix: str = "") -> list[str]:
 # 字段值提取
 # ═══════════════════════════════════════════════════════════════════
 
-def get_field_value(node: dict, path_parts: list[str]) -> float | int | None:
-    """按 . 分隔路径逐层查找，返回叶子节点数值。从 children 开始匹配第一段。"""
-    if not path_parts:
+def find_field_node(node: dict, path_parts: list[str]) -> dict[str, Any] | None:
+    """按字段路径查找节点，同时支持包含或省略根节点名称的路径。
+
+    信号页面生成的路径不包含根节点名称；模型有时会根据解析树传入完整路径，
+    因此这里兼容两种形式。数组路径未指定下标时匹配首个同名元素，显式写出
+    ``items[2]`` 时则只匹配该元素。
+    """
+    parts = [part.strip() for part in path_parts if part.strip()]
+    if not parts:
         return None
 
+    if _name_matches(node.get("name", ""), parts[0]):
+        return _match_node(node, parts, 0)
     for child in node.get("children", []):
-        result = _match_path(child, path_parts, 0)
+        result = _match_node(child, parts, 0)
         if result is not None:
             return result
     return None
 
 
-def _match_path(node: dict, parts: list[str], idx: int) -> float | int | None:
-    """递归匹配路径段。"""
+def get_field_value(node: dict, path_parts: list[str]) -> float | int | None:
+    """按路径提取叶子节点数值，非数值字段返回 ``None``。"""
+    matched = find_field_node(node, path_parts)
+    return _to_number(matched.get("value")) if matched is not None else None
+
+
+def _match_node(node: dict, parts: list[str], idx: int) -> dict[str, Any] | None:
+    """递归匹配路径段并返回目标节点，不复制其子树。"""
     if idx >= len(parts):
         return None
     if not _name_matches(node.get("name", ""), parts[idx]):
         return None
 
     if idx == len(parts) - 1:
-        val = node.get("value")
-        if val is not None:
-            return _to_number(val)
-        return None
+        return node
 
     for child in node.get("children", []):
-        result = _match_path(child, parts, idx + 1)
+        result = _match_node(child, parts, idx + 1)
         if result is not None:
             return result
 
@@ -114,7 +125,11 @@ def _strip_index(name: str) -> str:
 
 
 def _name_matches(node_name: str, target: str) -> bool:
-    """节点名与路径段比较（忽略数组下标）。"""
+    """比较路径段；目标显式包含数组下标时执行精确匹配。"""
+    node_name = str(node_name).strip()
+    target = str(target).strip()
+    if "[" in target:
+        return node_name == target
     return _strip_index(node_name) == target
 
 
@@ -122,10 +137,10 @@ def _to_number(val: Any) -> float | int | None:
     """将值转为数值类型，不可转为数值的返回 None。"""
     if val is None:
         return None
-    if isinstance(val, (int, float)):
-        return val
     if isinstance(val, bool):
         return int(val)
+    if isinstance(val, (int, float)):
+        return val
     if isinstance(val, str):
         try:
             return float(val)

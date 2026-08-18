@@ -12,8 +12,14 @@ from .find_service import TOOL_DEFINITION as FIND_SERVICE_DEFINITION
 from .find_service import find_service
 from .message_detail import TOOL_DEFINITION as MESSAGE_DETAIL_DEFINITION
 from .message_detail import get_message_detail
+from .notification_statistics import (
+    TOOL_DEFINITION as NOTIFICATION_STATISTICS_DEFINITION,
+)
+from .notification_statistics import get_notification_statistics
 from .offer_timeline import TOOL_DEFINITION as OFFER_TIMELINE_DEFINITION
 from .offer_timeline import get_offer_timeline
+from .payload_field import TOOL_DEFINITION as PAYLOAD_FIELD_DEFINITION
+from .payload_field import get_payload_field
 from .search_messages import TOOL_DEFINITION as SEARCH_MESSAGES_DEFINITION
 from .search_messages import search_messages
 from .subscription_status import TOOL_DEFINITION as SUBSCRIPTION_STATUS_DEFINITION
@@ -90,6 +96,28 @@ def _run_message_detail(session_id: str, arguments: dict[str, Any]) -> dict[str,
     )
 
 
+def _run_notification_statistics(
+    session_id: str,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    return get_notification_statistics(
+        session_id,
+        arguments.get("service_id"),
+        arguments.get("method_id"),
+        arguments.get("field_path"),
+        arguments.get("start_time"),
+        arguments.get("end_time"),
+    )
+
+
+def _run_payload_field(session_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    return get_payload_field(
+        session_id,
+        arguments.get("message_index"),
+        arguments.get("field_path"),
+    )
+
+
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
     SUBSCRIPTION_STATUS_DEFINITION,
     FIND_SERVICE_DEFINITION,
@@ -97,6 +125,8 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     SUBSCRIPTION_TIMELINE_DEFINITION,
     SEARCH_MESSAGES_DEFINITION,
     MESSAGE_DETAIL_DEFINITION,
+    NOTIFICATION_STATISTICS_DEFINITION,
+    PAYLOAD_FIELD_DEFINITION,
 ]
 
 _TOOL_HANDLERS: dict[str, ToolHandler] = {
@@ -106,6 +136,8 @@ _TOOL_HANDLERS: dict[str, ToolHandler] = {
     "get_subscription_timeline": _run_subscription_timeline,
     "search_messages": _run_search_messages,
     "get_message_detail": _run_message_detail,
+    "get_notification_statistics": _run_notification_statistics,
+    "get_payload_field": _run_payload_field,
 }
 
 
@@ -126,9 +158,11 @@ __all__ = [
     "execute_tool",
     "find_service",
     "get_message_detail",
+    "get_notification_statistics",
     "get_offer_timeline",
     "get_subscription_status",
     "get_subscription_timeline",
+    "get_payload_field",
     "search_messages",
     "tool_result_json",
 ]

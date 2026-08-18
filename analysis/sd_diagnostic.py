@@ -116,6 +116,9 @@ def build_message_evidence(
 def build_subscription_report(
     messages: list[dict[str, Any]],
     registry: Any,
+    *,
+    records: dict[str, Any] | None = None,
+    notifications: dict[tuple[int, int], Any] | None = None,
 ) -> dict[str, Any]:
     """生成订阅诊断报告。
 
@@ -123,8 +126,12 @@ def build_subscription_report(
     - 服务端 ECU（Offer 方）
     - 客户端 ECU（Subscribe 方）
     - Offer → Subscribe → Notification 链路状态
+
+    ``records`` 和 ``notifications`` 由统一查询层传入时，本函数不会再次
+    遍历完整消息；保留 ``messages`` 参数是为了兼容原有命令行和测试入口。
     """
-    records = extract_sd_records(messages)
+    if records is None:
+        records = extract_sd_records(messages)
 
     # 索引
     offers_by_srv: dict[int, list[dict]] = defaultdict(list)
@@ -144,18 +151,20 @@ def build_subscription_report(
         nacks_by_srv_eg[(nack["service_id"], nack["eventgroup_id"])].append(nack)
 
     # Notification 证据索引。后续按 EventGroup 关联并且只统计首次订阅后的通知。
-    notifications: dict[tuple[int, int], list[dict[str, Any]]] = defaultdict(list)
-    for msg in messages:
-        h = msg.get("header", {})
-        sid = h.get("service_id", {}).get("dec", 0)
-        mt = h.get("message_type", {}).get("dec", 0)
-        if sid == _SD_SERVICE_ID or not is_notification(mt):
-            continue
-        mid = h.get("method_id", {}).get("dec", 0)
-        notifications[(sid, mid)].append(build_message_evidence(
-            msg,
-            kind="Notification",
-        ))
+    if notifications is None:
+        notification_lists: dict[tuple[int, int], list[dict[str, Any]]] = defaultdict(list)
+        for msg in messages:
+            h = msg.get("header", {})
+            sid = h.get("service_id", {}).get("dec", 0)
+            mt = h.get("message_type", {}).get("dec", 0)
+            if sid == _SD_SERVICE_ID or not is_notification(mt):
+                continue
+            mid = h.get("method_id", {}).get("dec", 0)
+            notification_lists[(sid, mid)].append(build_message_evidence(
+                msg,
+                kind="Notification",
+            ))
+        notifications = notification_lists
 
     # 构建报告
     all_srv_ids: set[int] = set(offers_by_srv.keys()) | {k[0] for k in subs_by_srv_eg.keys()}

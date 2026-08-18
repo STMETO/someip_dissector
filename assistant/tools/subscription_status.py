@@ -3,8 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from analysis.sd_diagnostic import build_subscription_report
-from assistant.tool_support import format_hex, parse_int, require_session
+from assistant.tool_support import format_hex, parse_int, require_queries
 
 TOOL_DEFINITION: dict[str, Any] = {
     "type": "function",
@@ -43,8 +42,9 @@ _METRIC_DEFINITIONS = {
 
 def get_subscription_status(session_id: str, service_id: Any = None) -> dict[str, Any]:
     """返回统计单位明确、带报文证据的订阅诊断结果。"""
-    state = require_session(session_id)
-    report = build_subscription_report(state.messages, state.registry)
+    state, queries = require_queries(session_id)
+    # 诊断页和 AI 共用会话构建时生成的报告，避免重复扫描完整抓包。
+    report = queries.subscriptions.report()
     requested_id = parse_int(service_id, "Service ID")
     services = report.get("services", [])
     if requested_id is not None:

@@ -135,6 +135,7 @@ function select(item) {
                   <span>PCAP {{ timingValue(item, 'pcap_parse_ms') }}</span>
                   <span>Deserialize {{ timingValue(item, 'payload_deserialize_ms') }}</span>
                   <span>Render {{ timingValue(item, 'frontend_render_ms') }}</span>
+                  <span>Index {{ timingValue(item, item.timings?.query_index_ms ? 'query_index_ms' : 'query_index_restore_ms') }}</span>
                   <span v-if="item.timings?.last_persist_total_ms">
                     Save {{ timingValue(item, 'last_persist_total_ms') }}
                   </span>

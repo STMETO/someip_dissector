@@ -2,12 +2,18 @@
 from __future__ import annotations
 
 import unittest
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from analysis.sd_diagnostic import build_subscription_report
+from analysis.queries import MessageQuery, ensure_session_queries
 from assistant.tools import TOOL_DEFINITIONS, execute_tool
-from web.backend.handlers.analysis import _sessions
+from web.backend.handlers.analysis import _sessions, get_session
+from web.backend.handlers.sd_diagnostic import get_subscription_report
+from web.backend.handlers.signal_timing import get_signal_data, get_signal_meta
 
 _SESSION_ID = "assistant-tool-test"
 
@@ -48,7 +54,7 @@ class AssistantToolTests(unittest.TestCase):
     def tearDownClass(cls):
         _sessions.pop(_SESSION_ID, None)
 
-    def test_six_tools_are_registered(self):
+    def test_eight_tools_are_registered(self):
         names = [item["function"]["name"] for item in TOOL_DEFINITIONS]
         self.assertEqual(names, [
             "get_subscription_status",
@@ -57,7 +63,18 @@ class AssistantToolTests(unittest.TestCase):
             "get_subscription_timeline",
             "search_messages",
             "get_message_detail",
+            "get_notification_statistics",
+            "get_payload_field",
         ])
+
+    def test_query_index_is_reused_by_page_and_ai(self):
+        """页面和 Tool 必须复用同一查询对象，不能各自重建诊断结果。"""
+        state = _sessions[_SESSION_ID]
+        queries = ensure_session_queries(state)
+        execute_tool("get_subscription_status", {}, _SESSION_ID)
+
+        self.assertIs(ensure_session_queries(state), queries)
+        self.assertIs(get_subscription_report(_SESSION_ID), queries.subscriptions.report())
 
     def test_subscription_status_does_not_double_count_high_bit_eventgroup(self):
         result = execute_tool("get_subscription_status", {}, _SESSION_ID)
@@ -124,6 +141,70 @@ class AssistantToolTests(unittest.TestCase):
         self.assertEqual(detail["parsed_tree"]["name"], "ParkingState")
         self.assertNotIn("hex", detail["payload"])
 
+    def test_notification_statistics_and_payload_field(self):
+        statistics = execute_tool(
+            "get_notification_statistics",
+            {
+                "service_id": "0x0A01",
+                "method_id": "0xA005",
+                "field_path": "status.speed",
+            },
+            _SESSION_ID,
+        )
+        field = execute_tool(
+            "get_payload_field",
+            {"message_index": 4, "field_path": "status.speed"},
+            _SESSION_ID,
+        )
+
+        self.assertEqual(statistics["notification_count"], 1)
+        self.assertEqual(statistics["events"][0]["field_statistics"]["average"], 42)
+        self.assertEqual(field["field"]["value"], 42)
+        self.assertEqual(field["evidence"]["frame_index"], 104)
+
+    def test_signal_page_uses_unified_signal_query(self):
+        meta = get_signal_meta(_SESSION_ID)
+        series = get_signal_data(_SESSION_ID, 0x0A01, 0xA005, "status.speed")
+
+        self.assertEqual(meta[0]["events"][0]["fields"], ["status.speed"])
+        self.assertEqual(series["fields"][0]["points"][0]["value"], 42)
+
+    def test_non_monotonic_timestamps_fall_back_to_safe_filter(self):
+        later = _message(20, 120, 0x0A01, 1, 0x02, "10.0.0.1", "10.0.0.2", "Notification")
+        earlier = _message(21, 121, 0x0A01, 1, 0x02, "10.0.0.1", "10.0.0.2", "Notification")
+        later["timestamp_epoch"] = 2000.0
+        earlier["timestamp_epoch"] = 1000.0
+
+        query = MessageQuery([later, earlier])
+        result = query.search(start_time=1500.0)
+
+        self.assertFalse(query.index_stats["time_ordered"])
+        self.assertEqual(result.total, 1)
+        self.assertEqual(result.messages[0]["index"], 20)
+
+    def test_concurrent_session_restore_only_loads_disk_once(self):
+        """页面并发请求消息、诊断和信号时，同一持久化会话只能恢复一次。"""
+        session_id = "concurrent-session-load-test"
+        loaded_state = SimpleNamespace(session_id=session_id)
+        load_calls = []
+
+        def fake_load(requested_id):
+            load_calls.append(requested_id)
+            time.sleep(0.02)
+            return loaded_state
+
+        try:
+            with patch(
+                "web.backend.handlers.analysis._load_session_from_disk",
+                side_effect=fake_load,
+            ):
+                with ThreadPoolExecutor(max_workers=6) as executor:
+                    states = list(executor.map(get_session, [session_id] * 6))
+            self.assertTrue(all(state is loaded_state for state in states))
+            self.assertEqual(load_calls, [session_id])
+        finally:
+            _sessions.pop(session_id, None)
+
     def test_unregistered_tool_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "未知工具"):
             execute_tool("run_shell", {}, _SESSION_ID)
@@ -147,7 +228,29 @@ def _fixture_messages() -> list[dict]:
         4, 104, 0x0A01, 0xA005, 0x02, "10.0.0.1", "239.0.0.2", "Notification"
     )
     notification["parse_status"] = "ok"
-    notification["parsed"] = {"name": "ParkingState", "value": 1}
+    notification["parsed"] = {
+        "name": "ParkingState",
+        "type": "ParkingStateType",
+        "kind": "container",
+        "offset": 0,
+        "byte_size": 1,
+        "children": [{
+            "name": "status",
+            "type": "StatusType",
+            "kind": "container",
+            "offset": 0,
+            "byte_size": 1,
+            "children": [{
+                "name": "speed",
+                "type": "uint8",
+                "kind": "leaf",
+                "value": 42,
+                "offset": 0,
+                "byte_size": 1,
+                "hex": "2a",
+            }],
+        }],
+    }
     return [offer, subscribe, ack, notification]
 
 

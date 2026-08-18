@@ -25,11 +25,10 @@ from assistant import (
     configure as configure_assistant,
     status as assistant_status,
 )
+from analysis.queries import ensure_session_queries
 
 from web.backend.handlers.analysis import (
     clear_all_sessions,
-    build_message_detail,
-    build_message_summaries,
     clear_session,
     get_export_path,
     get_session,
@@ -38,6 +37,7 @@ from web.backend.handlers.analysis import (
     run_upload_and_parse,
     unpersist_session,
 )
+from presentation import build_message_detail_from_message, build_message_summaries
 from web.backend.handlers.sd_diagnostic import get_subscription_report
 from web.backend.handlers.signal_timing import get_signal_data, get_signal_meta
 
@@ -138,22 +138,25 @@ async def unsave_session(session_id: str) -> JSONResponse:
 
 @app.get("/api/messages/{session_id}")
 async def get_messages(session_id: str) -> JSONResponse:
-    state = get_session(session_id)
+    # 持久化会话首次读取可能需要解析大型 JSON，不能阻塞事件循环。
+    state = await run_in_threadpool(get_session, session_id)
     if state is None:
         raise HTTPException(status_code=404, detail="会话不存在或已过期")
     reg = getattr(state, "registry", None)
-    messages = await run_in_threadpool(build_message_summaries, state.messages, reg)
+    indexed_messages = ensure_session_queries(state).messages.all
+    messages = await run_in_threadpool(build_message_summaries, indexed_messages, reg)
     return JSONResponse(messages)
 
 
 @app.get("/api/message/{session_id}/{index}")
 async def get_message_detail(session_id: str, index: int) -> JSONResponse:
-    state = get_session(session_id)
+    state = await run_in_threadpool(get_session, session_id)
     if state is None:
         raise HTTPException(status_code=404, detail="会话不存在或已过期")
-    detail = await run_in_threadpool(build_message_detail, state.messages, index)
-    if detail is None:
+    message = ensure_session_queries(state).messages.get(index)
+    if message is None:
         raise HTTPException(status_code=404, detail="消息索引不存在")
+    detail = build_message_detail_from_message(message)
     return JSONResponse(detail)
 
 
@@ -215,7 +218,7 @@ async def delete_session(session_id: str) -> JSONResponse:
 
 @app.get("/api/export/{session_id}/{filename}")
 async def download_export(session_id: str, filename: str) -> FileResponse:
-    path = get_export_path(session_id, filename)
+    path = await run_in_threadpool(get_export_path, session_id, filename)
     if path is None:
         raise HTTPException(status_code=404, detail="导出文件不存在或已过期")
     return FileResponse(path, filename=filename, media_type="application/json")

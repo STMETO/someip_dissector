@@ -1,12 +1,12 @@
 """
 SD 订阅诊断 API — Web 胶水层。
 
-从会话缓存取 messages + registry → 调 analysis 模块生成诊断报告 → 返回 JSON。
+从会话缓存读取统一查询对象，页面与 AI Tool 返回同一份诊断事实。
 """
 from __future__ import annotations
 from typing import Any
 
-from analysis.sd_diagnostic import build_subscription_report
+from analysis.queries import ensure_session_queries
 from web.backend.handlers.analysis import get_session
 
 
@@ -16,5 +16,4 @@ def get_subscription_report(session_id: str) -> dict[str, Any] | None:
     if state is None:
         return None
 
-    registry = getattr(state, "registry", None)
-    return build_subscription_report(state.messages, registry)
+    return ensure_session_queries(state).subscriptions.report()

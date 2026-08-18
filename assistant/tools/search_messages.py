@@ -6,14 +6,10 @@ from typing import Any
 from assistant.tool_support import (
     clamp_limit,
     compact_message,
-    header_int,
-    in_time_range,
-    message_service_ids,
     parse_float,
     parse_int,
-    require_session,
+    require_queries,
 )
-from pcap_parsers.common import message_type_label
 
 TOOL_DEFINITION: dict[str, Any] = {
     "type": "function",
@@ -59,7 +55,7 @@ def search_messages(
     limit: Any = None,
 ) -> dict[str, Any]:
     """返回符合条件的紧凑报文摘要，原始详情由 message_detail 按索引读取。"""
-    state = require_session(session_id)
+    state, queries = require_queries(session_id)
     sid = parse_int(service_id, "Service ID")
     mid = parse_int(method_id, "Method/Event ID")
     type_filter = str(message_type or "").strip().casefold()
@@ -72,28 +68,20 @@ def search_messages(
     page_offset = int(parse_int(offset, "offset", minimum=0, maximum=10_000_000) or 0)
     page_limit = clamp_limit(limit, default=50, maximum=200)
 
-    matched_count = 0
-    page: list[dict[str, Any]] = []
-    for message in state.messages:
-        if sid is not None and sid not in message_service_ids(message):
-            continue
-        if mid is not None and header_int(message, "method_id") != mid:
-            continue
-        if src_filter and message.get("src_ip") != src_filter:
-            continue
-        if dst_filter and message.get("dst_ip") != dst_filter:
-            continue
-        if status_filter and str(message.get("parse_status", "unresolved")).casefold() != status_filter:
-            continue
-        if type_filter and not _matches_message_type(message, type_filter):
-            continue
-        if entry_filter and not _matches_sd_entry(message, entry_filter):
-            continue
-        if not in_time_range(message, start, end):
-            continue
-        if page_offset <= matched_count < page_offset + page_limit:
-            page.append(compact_message(message, state.registry))
-        matched_count += 1
+    found = queries.messages.search(
+        service_id=sid,
+        method_id=mid,
+        message_type=type_filter,
+        src_ip=src_filter,
+        dst_ip=dst_filter,
+        sd_entry_type=entry_filter,
+        parse_status=status_filter,
+        start_time=start,
+        end_time=end,
+        offset=page_offset,
+        limit=page_limit,
+    )
+    page = [compact_message(message, state.registry) for message in found.messages]
 
     return {
         "filters": {
@@ -107,31 +95,10 @@ def search_messages(
             "start_time": start,
             "end_time": end,
         },
-        "matched_message_count": matched_count,
+        "matched_message_count": found.total,
         "offset": page_offset,
-        "next_offset": page_offset + len(page) if page_offset + len(page) < matched_count else None,
+        "next_offset": found.next_offset,
         "messages": page,
     }
-
-
-def _matches_message_type(message: dict[str, Any], query: str) -> bool:
-    """同时匹配线上的数值类型和 SD 精确业务类型。"""
-    value = header_int(message, "message_type")
-    candidates = {
-        str(value).casefold(),
-        f"0x{value:02x}",
-        message_type_label(value).casefold(),
-        str(message.get("message_kind", "")).casefold(),
-    }
-    return any(query == candidate or query in candidate for candidate in candidates)
-
-
-def _matches_sd_entry(message: dict[str, Any], query: str) -> bool:
-    """检查一条 SD 报文中是否至少包含一个目标 Entry 类型。"""
-    return any(
-        query in str(entry.get("type", "")).casefold()
-        for entry in message.get("sd", {}).get("entries", [])
-    )
-
 
 __all__ = ["TOOL_DEFINITION", "search_messages"]

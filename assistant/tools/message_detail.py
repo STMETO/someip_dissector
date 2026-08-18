@@ -11,7 +11,7 @@ from assistant.tool_support import (
     lookup_service_name,
     parse_bool,
     parse_int,
-    require_session,
+    require_queries,
 )
 from pcap_parsers.common import message_type_label
 
@@ -47,7 +47,7 @@ def get_message_detail(
     include_parsed_tree: Any = True,
 ) -> dict[str, Any]:
     """读取一条报文并限制大字段长度，防止单条深层 Payload 占满模型上下文。"""
-    state = require_session(session_id)
+    state, queries = require_queries(session_id)
     index = int(parse_int(
         message_index,
         "message_index",
@@ -57,7 +57,8 @@ def get_message_detail(
     ))
     with_payload = parse_bool(include_payload_hex, "include_payload_hex")
     with_tree = parse_bool(include_parsed_tree, "include_parsed_tree", default=True)
-    message = next((item for item in state.messages if int(item.get("index", -1)) == index), None)
+    # 报文索引在会话建立时已构建，这里是 O(1) 读取。
+    message = queries.messages.get(index)
     if message is None:
         raise ValueError(f"消息索引 {index} 不存在")
 
