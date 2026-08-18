@@ -2,7 +2,15 @@
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { askAssistantStream, configureAssistant, fetchAssistantStatus } from '../api'
+import {
+  askAssistantStream,
+  cancelAssistantRequest,
+  configureAssistant,
+  fetchAssistantConversation,
+  fetchAssistantStatus,
+  probeAssistant,
+  setAssistantPersistence,
+} from '../api'
 
 const DEFAULT_DRAWER_WIDTH = 440
 const MIN_DRAWER_WIDTH = 360
@@ -13,6 +21,7 @@ const props = defineProps({
   open: Boolean,
   sessionId: { type: String, default: '' },
   pcapName: { type: String, default: '' },
+  persistent: Boolean,
 })
 
 const emit = defineEmits([
@@ -28,7 +37,17 @@ const statusLoading = ref(false)
 const configOpen = ref(false)
 const configSaving = ref(false)
 const configError = ref('')
-const configForm = ref({ api_key: '', api_base: '', model: '' })
+const configForm = ref({
+  api_key: '',
+  api_base: '',
+  model: '',
+  provider: 'auto',
+  context_window: 65536,
+  max_output_tokens: 4096,
+  stream: true,
+})
+const probeLoading = ref(false)
+const probeResult = ref(null)
 
 const messages = ref([])
 const conversationId = ref(null)
@@ -37,11 +56,20 @@ const sending = ref(false)
 const chatError = ref('')
 const progressEvents = ref([])
 const progressMessage = ref('')
+const streamedAnswer = ref('')
+const contextStats = ref(null)
+const failedQuestion = ref('')
+const persistence = ref({ available: false, enabled: false })
+const persistenceSaving = ref(false)
 const messageList = ref(null)
 const drawerWidth = ref(DEFAULT_DRAWER_WIDTH)
 const resizing = ref(false)
 let resizeStartX = 0
 let resizeStartWidth = DEFAULT_DRAWER_WIDTH
+let activeController = null
+let activeRequestId = ''
+let activeRequestSessionId = ''
+let conversationLoadSerial = 0
 
 watch(() => props.open, async (isOpen) => {
   if (isOpen) {
@@ -54,13 +82,23 @@ watch(() => props.open, async (isOpen) => {
 })
 
 // 每段对话只绑定一份解析记录；切换记录时清空上下文，防止“这个服务”等指代串到其他会话。
-watch(() => props.sessionId, () => {
+watch(() => props.sessionId, (sessionId) => {
+  cancelCurrentRequest()
   messages.value = []
   conversationId.value = null
   draft.value = ''
   chatError.value = ''
   progressEvents.value = []
   progressMessage.value = ''
+  streamedAnswer.value = ''
+  failedQuestion.value = ''
+  persistence.value = { available: false, enabled: false }
+  if (sessionId) loadConversation(sessionId)
+})
+
+watch(() => props.persistent, (persistent) => {
+  persistence.value.available = Boolean(persistent)
+  if (!persistent) persistence.value.enabled = false
 })
 
 onMounted(() => {
@@ -69,6 +107,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  cancelCurrentRequest()
+  if (scrollFrame) window.cancelAnimationFrame(scrollFrame)
   stopResize()
   window.removeEventListener('resize', clampDrawerWidth)
 })
@@ -78,6 +118,7 @@ async function refreshStatus() {
   try {
     const next = await fetchAssistantStatus()
     applyStatus(next)
+    probeResult.value = null
     if (!next.configured) configOpen.value = true
   } catch (error) {
     configError.value = apiError(error, '无法读取模型配置')
@@ -90,6 +131,10 @@ function applyStatus(next) {
   status.value = next
   configForm.value.api_base = next.api_base || 'https://api.deepseek.com'
   configForm.value.model = next.model || 'deepseek-v4-flash'
+  configForm.value.provider = next.provider || 'auto'
+  configForm.value.context_window = next.context_window || 65536
+  configForm.value.max_output_tokens = next.max_output_tokens || 4096
+  configForm.value.stream = next.stream !== false
 }
 
 async function saveConfig() {
@@ -100,6 +145,10 @@ async function saveConfig() {
       api_key: configForm.value.api_key || null,
       api_base: configForm.value.api_base.trim(),
       model: configForm.value.model.trim(),
+      provider: configForm.value.provider,
+      context_window: Number(configForm.value.context_window),
+      max_output_tokens: Number(configForm.value.max_output_tokens),
+      stream: Boolean(configForm.value.stream),
     })
     applyStatus(next)
     configForm.value.api_key = ''
@@ -111,26 +160,95 @@ async function saveConfig() {
   }
 }
 
+async function runProbe() {
+  if (probeLoading.value || !status.value.configured) return
+  probeLoading.value = true
+  probeResult.value = null
+  configError.value = ''
+  try {
+    probeResult.value = await probeAssistant()
+  } catch (error) {
+    configError.value = apiError(error, '模型能力验证失败')
+  } finally {
+    probeLoading.value = false
+  }
+}
+
+async function loadConversation(sessionId) {
+  const serial = ++conversationLoadSerial
+  try {
+    const result = await fetchAssistantConversation(sessionId)
+    if (serial !== conversationLoadSerial || sessionId !== props.sessionId) return
+    persistence.value = {
+      available: Boolean(result.available),
+      enabled: Boolean(result.enabled),
+    }
+    const conversation = result.conversation
+    if (!conversation) return
+    conversationId.value = conversation.conversation_id
+    messages.value = (conversation.history || []).map(item => ({
+      role: item.role,
+      content: item.content,
+      renderedContent: item.role === 'assistant' ? renderMarkdown(item.content) : null,
+      model: conversation.model,
+    }))
+    await scrollToLatest()
+  } catch (error) {
+    if (serial === conversationLoadSerial) {
+      chatError.value = apiError(error, '无法恢复 AI 对话')
+    }
+  }
+}
+
+async function togglePersistence() {
+  if (persistenceSaving.value || !props.sessionId) return
+  persistenceSaving.value = true
+  chatError.value = ''
+  try {
+    const result = await setAssistantPersistence(
+      props.sessionId,
+      !persistence.value.enabled,
+    )
+    persistence.value = {
+      available: Boolean(result.available),
+      enabled: Boolean(result.enabled),
+    }
+  } catch (error) {
+    chatError.value = apiError(error, '对话保存设置失败')
+  } finally {
+    persistenceSaving.value = false
+  }
+}
+
 async function submitQuestion(value = draft.value) {
   const question = String(value || '').trim()
   if (!question || sending.value || !props.sessionId || !status.value.configured) return
+  const submittedSessionId = props.sessionId
 
   messages.value.push({ role: 'user', content: question })
   draft.value = ''
   sending.value = true
   chatError.value = ''
+  failedQuestion.value = ''
   // 每个问题独立显示进度，避免上一轮 Tool 状态残留造成误解。
   progressEvents.value = []
   progressMessage.value = '正在分析问题'
+  streamedAnswer.value = ''
+  contextStats.value = null
+  activeController = new AbortController()
+  activeRequestId = createRequestId()
+  activeRequestSessionId = props.sessionId
   await scrollToLatest()
 
   try {
     const result = await askAssistantStream(
-      props.sessionId,
+      submittedSessionId,
       question,
       conversationId.value,
       onProgressEvent,
+      { signal: activeController.signal, requestId: activeRequestId },
     )
+    if (props.sessionId !== submittedSessionId) return
     conversationId.value = result.conversation_id
     messages.value.push({
       role: 'assistant',
@@ -138,19 +256,42 @@ async function submitQuestion(value = draft.value) {
       renderedContent: renderMarkdown(result.answer),
       tools: result.tools || [],
       model: result.model,
+      usage: result.usage || {},
+      context: result.context || null,
     })
   } catch (error) {
-    chatError.value = apiError(error, '问答请求失败')
+    if (props.sessionId !== submittedSessionId) return
+    const cancelled = error?.name === 'AbortError' || error?.code === 'ASSISTANT_CANCELLED'
+    if (cancelled) {
+      chatError.value = '请求已取消，可重新发送该问题。'
+    } else {
+      chatError.value = apiError(error, '问答请求失败')
+    }
+    failedQuestion.value = question
   } finally {
+    activeController = null
+    activeRequestId = ''
+    activeRequestSessionId = ''
     sending.value = false
     progressMessage.value = ''
+    streamedAnswer.value = ''
     await scrollToLatest()
   }
 }
 
 function onProgressEvent(event) {
-  if (event.type === 'status') {
+  if (event.type === 'status' || event.type === 'context') {
     progressMessage.value = event.message || '正在分析问题'
+    if (event.type === 'context') contextStats.value = event
+    return
+  }
+  if (event.type === 'text_reset') {
+    streamedAnswer.value = ''
+    return
+  }
+  if (event.type === 'text_delta') {
+    streamedAnswer.value += event.delta || ''
+    scheduleScroll()
     return
   }
   if (event.type === 'tool_start') {
@@ -176,6 +317,40 @@ function onProgressEvent(event) {
     progressEvents.value = next
     progressMessage.value = '正在整理查询结果'
   }
+}
+
+async function cancelCurrentRequest() {
+  if (!activeController) return
+  const controller = activeController
+  const requestId = activeRequestId
+  const requestSessionId = activeRequestSessionId
+  // 先通知后端设置取消标记，再中止浏览器读取；两边都执行以释放连接和工作线程。
+  if (requestId && requestSessionId) {
+    await cancelAssistantRequest(requestSessionId, requestId).catch(() => {})
+  }
+  controller.abort()
+}
+
+function retryLastQuestion() {
+  if (!failedQuestion.value || sending.value) return
+  const question = failedQuestion.value
+  const last = messages.value[messages.value.length - 1]
+  if (last?.role === 'user' && last.content === question) messages.value.pop()
+  submitQuestion(question)
+}
+
+function createRequestId() {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID()
+  return `assistant-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+let scrollFrame = 0
+function scheduleScroll() {
+  if (scrollFrame) return
+  scrollFrame = window.requestAnimationFrame(async () => {
+    scrollFrame = 0
+    await scrollToLatest()
+  })
 }
 
 function onToolLink(link) {
@@ -355,7 +530,7 @@ function apiError(error, fallback) {
         <header class="assistant-header">
           <div>
             <h2>AI 分析助手</h2>
-            <p>{{ status.model || '尚未配置模型' }}</p>
+            <p>{{ status.model || '尚未配置模型' }}<template v-if="status.effective_provider"> · {{ status.effective_provider }}</template></p>
           </div>
           <div class="assistant-header-actions">
             <span
@@ -378,6 +553,17 @@ function apiError(error, fallback) {
             {{ pcapName || (sessionId ? `会话 ${sessionId}` : '未选择抓包') }}
           </strong>
           <small v-if="sessionId" class="mono">{{ sessionId }}</small>
+          <button
+            v-if="sessionId"
+            type="button"
+            class="conversation-persistence"
+            :class="{ active: persistence.enabled }"
+            :disabled="persistenceSaving || !persistence.available"
+            :title="persistence.available ? '选择是否随解析记录保存 AI 对话' : '请先持久化保存解析记录'"
+            @click="togglePersistence"
+          >
+            {{ persistenceSaving ? '设置中...' : (persistence.enabled ? '对话已保存' : '对话不保存') }}
+          </button>
         </section>
 
         <section class="assistant-config" :class="{ expanded: configOpen }">
@@ -392,8 +578,18 @@ function apiError(error, fallback) {
           </button>
           <form v-if="configOpen" class="config-form" @submit.prevent="saveConfig">
             <p class="config-note">
-              当前预设 DeepSeek。不同服务商的 API Key 不通用，切换服务商时需同时修改以下三项。
+              Provider 决定请求格式；上下文窗口必须按模型文档填写。API Key 只保存在当前后端进程。
             </p>
+            <label>
+              <span>Provider</span>
+              <select v-model="configForm.provider">
+                <option
+                  v-for="item in status.providers || []"
+                  :key="item.provider"
+                  :value="item.provider"
+                >{{ item.label }}</option>
+              </select>
+            </label>
             <label>
               <span>API Key</span>
               <input
@@ -412,10 +608,32 @@ function apiError(error, fallback) {
               <span>模型名称</span>
               <input v-model="configForm.model" type="text" required>
             </label>
+            <div class="config-number-grid">
+              <label>
+                <span>上下文窗口</span>
+                <input v-model.number="configForm.context_window" type="number" min="4096" max="2000000" required>
+              </label>
+              <label>
+                <span>最大输出 Token</span>
+                <input v-model.number="configForm.max_output_tokens" type="number" min="256" max="131072" required>
+              </label>
+            </div>
+            <label class="config-check">
+              <input v-model="configForm.stream" type="checkbox">
+              <span>启用模型文本流式输出</span>
+            </label>
             <p v-if="configError" class="config-error" role="alert">{{ configError }}</p>
-            <button class="config-save" type="submit" :disabled="configSaving || statusLoading">
-              {{ configSaving ? '保存中...' : '应用配置' }}
-            </button>
+            <p v-if="probeResult" class="probe-result" :class="{ ok: probeResult.ok }">
+              {{ probeResult.message }}
+            </p>
+            <div class="config-actions">
+              <button class="config-probe" type="button" :disabled="probeLoading || !status.configured" @click="runProbe">
+                {{ probeLoading ? '验证中...' : '验证 Tool Calling' }}
+              </button>
+              <button class="config-save" type="submit" :disabled="configSaving || statusLoading">
+                {{ configSaving ? '保存中...' : '应用配置' }}
+              </button>
+            </div>
           </form>
         </section>
 
@@ -466,6 +684,11 @@ function apiError(error, fallback) {
                 >{{ link.label }}</button>
               </div>
             </footer>
+            <footer v-if="message.role === 'assistant' && (message.usage || message.context)" class="message-metrics">
+              <span v-if="message.usage?.total_tokens">Token {{ message.usage.total_tokens }}</span>
+              <span v-if="message.context?.estimated_input_tokens">估算输入 {{ message.context.estimated_input_tokens }}</span>
+              <span v-if="message.context?.dropped_messages">摘要 {{ message.context.dropped_messages }} 条旧消息</span>
+            </footer>
           </article>
 
           <article v-if="sending" class="chat-message is-assistant is-loading" aria-label="AI 正在分析">
@@ -480,10 +703,21 @@ function apiError(error, fallback) {
                 >{{ item.message }}</span>
               </div>
               <div v-else class="loading-lines"><i></i><i></i><i></i></div>
+              <div
+                v-if="streamedAnswer"
+                class="streamed-answer markdown-body"
+                v-html="renderMarkdown(streamedAnswer)"
+              ></div>
+              <small v-if="contextStats" class="context-budget">
+                估算 {{ contextStats.estimated_input_tokens }} / {{ contextStats.context_window }} Token
+              </small>
             </div>
           </article>
 
-          <p v-if="chatError" class="chat-error" role="alert">{{ chatError }}</p>
+          <div v-if="chatError" class="chat-error" role="alert">
+            <span>{{ chatError }}</span>
+            <button v-if="failedQuestion" type="button" @click="retryLastQuestion">重试</button>
+          </div>
         </div>
 
         <form class="assistant-composer" @submit.prevent="submitQuestion()">
@@ -498,9 +732,8 @@ function apiError(error, fallback) {
           ></textarea>
           <div class="composer-footer">
             <span>Enter 发送，Shift+Enter 换行</span>
-            <button type="submit" :disabled="!draft.trim() || sending || !sessionId || !status.configured">
-              发送
-            </button>
+            <button v-if="sending" type="button" class="stop-request" @click="cancelCurrentRequest">停止</button>
+            <button v-else type="submit" :disabled="!draft.trim() || !sessionId || !status.configured">发送</button>
           </div>
         </form>
       </aside>
@@ -662,6 +895,26 @@ body.assistant-is-resizing {
   color: var(--text-tertiary);
   font-size: 10px;
 }
+.conversation-persistence {
+  grid-column: 1 / -1;
+  width: fit-content;
+  min-height: 26px;
+  margin-top: 4px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 800;
+}
+.conversation-persistence.active {
+  border-color: var(--success-border);
+  background: var(--success-soft);
+  color: var(--success);
+}
+.conversation-persistence:disabled { cursor: not-allowed; opacity: .58; }
 .assistant-config {
   border-bottom: 1px solid var(--border);
   background: var(--surface);
@@ -702,7 +955,8 @@ body.assistant-is-resizing {
   font-size: 11px;
   font-weight: 800;
 }
-.config-form input {
+.config-form input:not([type="checkbox"]),
+.config-form select {
   width: 100%;
   height: 34px;
   padding: 0 9px;
@@ -714,10 +968,41 @@ body.assistant-is-resizing {
   font-size: 12px;
 }
 .config-form input::placeholder { color: var(--text-tertiary); }
-.config-form input:focus {
+.config-form input:focus,
+.config-form select:focus {
   border-color: var(--accent);
   box-shadow: var(--focus-ring);
 }
+.config-number-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 9px;
+}
+.config-check {
+  display: flex !important;
+  grid-template-columns: none !important;
+  align-items: center;
+  gap: 8px !important;
+}
+.config-check input { width: 15px; height: 15px; accent-color: var(--accent); }
+.config-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.config-probe {
+  min-height: 34px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-subtle);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 850;
+}
+.config-probe:disabled { opacity: .55; cursor: not-allowed; }
+.probe-result {
+  color: var(--danger);
+  font-size: 10px;
+  font-weight: 750;
+}
+.probe-result.ok { color: var(--success); }
 .config-form label small {
   color: var(--text-tertiary);
   font-size: 10px;
@@ -913,6 +1198,11 @@ body.assistant-is-resizing {
   font-size: 9px;
 }
 .tool-evidence > span { display: block; }
+.message-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
 .evidence-links {
   display: flex;
   flex-wrap: wrap;
@@ -943,6 +1233,21 @@ body.assistant-is-resizing {
   display: block;
   color: var(--text-secondary);
   font-size: 11px;
+}
+.streamed-answer {
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.58;
+}
+.context-budget {
+  display: block;
+  margin-top: 8px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 9px;
 }
 .progress-steps { display: grid; gap: 5px; margin-top: 8px; }
 .progress-steps span {
@@ -980,10 +1285,25 @@ body.assistant-is-resizing {
 .loading-lines i:nth-child(2) { width: 84%; }
 .loading-lines i:nth-child(3) { width: 56%; }
 .chat-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   padding: 9px 10px;
   border: 1px solid var(--danger-border);
   border-radius: var(--radius-control);
   background: var(--danger-soft);
+}
+.chat-error button {
+  flex-shrink: 0;
+  min-height: 27px;
+  padding: 0 8px;
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--danger);
+  cursor: pointer;
+  font-weight: 850;
 }
 .assistant-composer {
   padding: 12px;
@@ -1036,6 +1356,11 @@ body.assistant-is-resizing {
 .composer-footer button:hover:not(:disabled) {
   border-color: var(--accent-hover);
   background: var(--accent-hover);
+}
+.composer-footer .stop-request {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 .composer-footer button:disabled {
   border-color: var(--border);

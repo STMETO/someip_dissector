@@ -18,12 +18,18 @@ from starlette.concurrency import run_in_threadpool
 from assistant import (
     AssistantChatRequest,
     AssistantConfigRequest,
+    AssistantPersistenceRequest,
     AssistantError,
+    cancel_request as cancel_assistant_request,
     chat as assistant_chat,
     chat_stream as assistant_chat_stream,
     clear_all_conversations,
     clear_conversations,
     configure as configure_assistant,
+    conversation_overview,
+    probe as probe_assistant,
+    remove_persisted_conversations,
+    set_conversation_persistence,
     status as assistant_status,
 )
 from analysis.queries import ensure_session_queries
@@ -86,6 +92,7 @@ async def stream_assistant(
             session_id,
             request.question,
             request.conversation_id,
+            request.request_id,
         ),
         media_type="application/x-ndjson",
         headers={
@@ -124,6 +131,49 @@ async def set_assistant_config(request: AssistantConfigRequest) -> JSONResponse:
     return JSONResponse(result)
 
 
+@app.post("/api/assistant/probe")
+async def check_assistant_capabilities() -> JSONResponse:
+    """发起一次最小请求，验证当前模型是否支持 Tool Calling。"""
+    try:
+        result = await run_in_threadpool(probe_assistant)
+    except AssistantError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return JSONResponse(result)
+
+
+@app.get("/api/session/{session_id}/assistant/conversations")
+async def get_assistant_conversations(session_id: str) -> JSONResponse:
+    try:
+        result = await run_in_threadpool(conversation_overview, session_id)
+    except AssistantError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return JSONResponse(result)
+
+
+@app.put("/api/session/{session_id}/assistant/persistence")
+async def update_assistant_persistence(
+    session_id: str,
+    request: AssistantPersistenceRequest,
+) -> JSONResponse:
+    try:
+        result = await run_in_threadpool(
+            set_conversation_persistence,
+            session_id,
+            request.enabled,
+        )
+    except AssistantError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return JSONResponse(result)
+
+
+@app.post("/api/session/{session_id}/assistant/cancel/{request_id}")
+async def cancel_assistant(session_id: str, request_id: str) -> JSONResponse:
+    # 请求 ID 与解析记录双重匹配，避免误取消其他会话的并发请求。
+    return JSONResponse({
+        "cancelled": cancel_assistant_request(request_id, session_id)
+    })
+
+
 @app.post("/api/session/{session_id}/assistant/chat")
 async def ask_assistant(
     session_id: str,
@@ -151,6 +201,7 @@ async def save_session(session_id: str) -> JSONResponse:
 
 @app.post("/api/session/{session_id}/unpersist")
 async def unsave_session(session_id: str) -> JSONResponse:
+    await run_in_threadpool(remove_persisted_conversations, session_id)
     summary = await run_in_threadpool(unpersist_session, session_id)
     if summary is None:
         raise HTTPException(status_code=404, detail="会话不存在或已过期")
@@ -232,7 +283,8 @@ async def signal_data(
 
 @app.delete("/api/session/{session_id}")
 async def delete_session(session_id: str) -> JSONResponse:
-    clear_conversations(session_id)
+    # 持久化会话可能尚未恢复，清理对话时的磁盘读取也必须离开事件循环。
+    await run_in_threadpool(clear_conversations, session_id, True)
     await run_in_threadpool(clear_session, session_id)
     return JSONResponse({"ok": True})
 

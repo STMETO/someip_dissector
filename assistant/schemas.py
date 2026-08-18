@@ -22,6 +22,12 @@ class AssistantConfigRequest(BaseModel):
     api_base: str = Field(min_length=8, max_length=2048)
     # model 必填，模型名称，非空，限制长度
     model: str = Field(min_length=1, max_length=256)
+    # Provider 只决定请求适配方式；auto 会根据 API 地址自动判断 DeepSeek。
+    provider: str = Field(default="auto", min_length=1, max_length=64)
+    # 该值必须以供应商文档为准，用于请求前的本地上下文预算保护。
+    context_window: int = Field(default=65536, ge=4096, le=2_000_000)
+    max_output_tokens: int = Field(default=4096, ge=256, le=131072)
+    stream: bool = True
 
 
 class AssistantChatRequest(BaseModel):
@@ -33,3 +39,11 @@ class AssistantChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=8000)
     # 会话ID，可选。用来区分不同对话；传null代表新建一次对话，不关联历史上下文
     conversation_id: str | None = Field(default=None, max_length=128)
+    # 前端生成请求ID，用于显式取消仍在后台执行的模型请求。
+    request_id: str | None = Field(default=None, min_length=8, max_length=128)
+
+
+class AssistantPersistenceRequest(BaseModel):
+    """设置当前解析记录是否将 AI 对话一起保存到磁盘。"""
+
+    enabled: bool

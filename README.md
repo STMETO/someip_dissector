@@ -13,6 +13,8 @@
 ```bash
 pip install scapy lxml typing_extensions
 pip install fastapi uvicorn python-multipart aiofiles
+# 可选：AI 上下文使用更准确的 OpenAI 系列 Token 计数
+pip install tiktoken
 ```
 
 | 依赖 | 用途 |
@@ -73,7 +75,11 @@ someip_dissector/
 ├── assistant/                          # AI 问答编排层（不依赖具体 Web 页面）
 │   ├── __init__.py                     # 对外导出配置、问答和会话清理接口
 │   ├── config.py                       # 模型地址、模型名称和进程内 API Key
-│   ├── provider.py                     # OpenAI-compatible 请求客户端
+│   ├── provider.py                     # Provider 兼容门面与模型能力探测
+│   ├── providers/                      # 可插拔模型供应商适配器与注册表
+│   ├── conversation_store.py           # AI 对话可选持久化，采用原子 JSON 写入
+│   ├── token_budget.py                 # Token 计数、上下文预算与滚动摘要
+│   ├── navigation.py                   # Tool 结构化结果到前端证据导航参数
 │   ├── schemas.py                      # 配置和对话请求的 Pydantic 模型
 │   ├── service.py                      # 对话上下文、系统提示词和 Tool Calling 循环
 │   ├── tool_support.py                 # Tool 共用参数校验、会话读取和证据格式化
@@ -254,6 +260,12 @@ python run.py web
 不同服务商签发的 API Key 不通用，切换服务商时必须同时检查 API Key、API 地址
 和模型名称。API Key 只保存在后端进程内存，不会写入浏览器存储或项目文件。
 
+模型配置还可以选择 `DeepSeek` 或通用 `OpenAI-compatible` Provider、上下文窗口、
+最大输出 Token 和流式开关。“验证 Tool Calling”会产生一次最小模型请求，用于
+检查当前模型是否返回强制 Tool Call，并在启用流式模式时同时验证 SSE 响应。
+上下文窗口无法从所有兼容接口可靠读取，因此必须按供应商文档填写；后端会在
+每次请求前预留 Tool Schema、最大输出和安全余量，超限时滚动摘要较早对话。
+
 也可以在启动服务前通过环境变量配置 DeepSeek：
 
 ```bash
@@ -273,8 +285,17 @@ python run.py web
 assistant/
 ├── __init__.py
 ├── config.py
+├── conversation_store.py
 ├── navigation.py
 ├── provider.py
+├── token_budget.py
+├── providers/
+│   ├── __init__.py
+│   ├── base.py
+│   ├── deepseek.py
+│   ├── generic.py
+│   ├── openai_compatible.py
+│   └── registry.py
 ├── schemas.py
 ├── service.py
 ├── tool_support.py
@@ -294,8 +315,16 @@ assistant/
 |------------|------|
 | `assistant/__init__.py` | 稳定的包入口，供 FastAPI 导入助手服务，不暴露内部实现细节 |
 | `assistant/config.py` | 合并页面运行时配置、环境变量和默认值；API Key 仅驻留当前进程内存 |
+| `assistant/conversation_store.py` | 按解析记录可选保存对话文本和滚动摘要，使用临时文件原子替换 |
 | `assistant/navigation.py` | 从 Tool 结构化结果提取报文、Service、EventGroup 和信号时序导航参数 |
-| `assistant/provider.py` | 构造 OpenAI-compatible Chat Completions 请求并统一转换连接错误 |
+| `assistant/provider.py` | Provider 兼容门面，统一模型调用和能力探测接口 |
+| `assistant/providers/` | Provider 协议、DeepSeek/通用兼容适配器、SSE 解析和注册表 |
+| `assistant/providers/base.py` | 所有厂商 Provider 直接继承的抽象基类，以及统一能力和异常定义 |
+| `assistant/providers/openai_compatible.py` | 可被组合复用的 Chat Completions、Tool Calling 和 SSE 协议客户端，不代表具体厂商 |
+| `assistant/providers/deepseek.py` | 直接继承基类，维护 DeepSeek 请求参数，并组合使用兼容协议客户端 |
+| `assistant/providers/generic.py` | 直接继承基类，为没有独立厂商规则的 OpenAI-compatible 服务提供适配 |
+| `assistant/providers/registry.py` | 根据页面显式选择或 API 域名解析实际 Provider，避免业务层出现厂商分支 |
+| `assistant/token_budget.py` | Token 计数、上下文预算、最近轮次保留和有界滚动摘要 |
 | `assistant/schemas.py` | 校验模型配置和对话请求长度、类型等 API 边界 |
 | `assistant/service.py` | 绑定解析会话与对话历史，注入系统提示词，循环处理模型 Tool Calling |
 | `assistant/tool_support.py` | 集中实现 ID/时间/布尔参数解析、返回量限制、名称查询和报文证据格式 |
@@ -322,6 +351,11 @@ Tool 执行期间会实时显示查询阶段。最终回答中的稳定 Markdown
 返回的结构化证据按钮都支持联动：报文证据打开对应消息与解析树，Service 和
 EventGroup 打开订阅诊断并定位目标，带时间范围的信号证据打开时序图并缩放。
 原同步 `/assistant/chat` 接口仍保留，用于兼容已有调用方。
+
+流式接口还会发送 `context`、`text_reset`、`text_delta`、`cancelled` 等事件。
+前端可以停止活动请求或重试失败问题。解析记录已持久化时，AI 面板中的“对话不保存”
+可切换为“对话已保存”；保存文件位于该记录的 `assistant/conversations.json`，其中
+不包含 API Key、System Prompt、Tool 原始结果或完整 Payload。
 
 ### 命令行调试
 

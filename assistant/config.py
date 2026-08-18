@@ -14,6 +14,9 @@ from urllib.parse import urlparse
 _DEFAULT_API_BASE = "https://api.deepseek.com"
 # 默认调用模型
 _DEFAULT_MODEL = "deepseek-v4-flash"
+_DEFAULT_CONTEXT_WINDOW = 65536
+_DEFAULT_MAX_OUTPUT_TOKENS = 4096
+_VALID_PROVIDERS = {"auto", "deepseek", "openai_compatible"}
 
 
 @dataclass(frozen=True)
@@ -31,6 +34,10 @@ class ModelConfig:
     model: str
     timeout_seconds: float
     source: str
+    provider: str = "auto"
+    context_window: int = _DEFAULT_CONTEXT_WINDOW
+    max_output_tokens: int = _DEFAULT_MAX_OUTPUT_TOKENS
+    stream: bool = True
 
     @property
     def configured(self) -> bool:
@@ -44,6 +51,10 @@ _lock = Lock()
 _runtime_api_key = ""
 _runtime_api_base = ""
 _runtime_model = ""
+_runtime_provider = ""
+_runtime_context_window: int | None = None
+_runtime_max_output_tokens: int | None = None
+_runtime_stream: bool | None = None
 
 
 def get_model_config() -> ModelConfig:
@@ -57,6 +68,10 @@ def get_model_config() -> ModelConfig:
         runtime_key = _runtime_api_key
         runtime_base = _runtime_api_base
         runtime_model = _runtime_model
+        runtime_provider = _runtime_provider
+        runtime_context_window = _runtime_context_window
+        runtime_max_output_tokens = _runtime_max_output_tokens
+        runtime_stream = _runtime_stream
 
     # 读取环境变量，优先 AI_API_KEY，其次 DEEPSEEK_API_KEY，去除首尾空白
     env_key = (
@@ -69,6 +84,14 @@ def get_model_config() -> ModelConfig:
     # 2. runtime空但env_key存在：来自系统环境变量
     # 3. 两者都为空：无有效密钥
     source = "runtime" if runtime_key else ("environment" if env_key else "none")
+    context_window = runtime_context_window or _read_int_env(
+        "AI_CONTEXT_WINDOW", _DEFAULT_CONTEXT_WINDOW, 4096, 2_000_000
+    )
+    max_output_tokens = runtime_max_output_tokens or _read_int_env(
+        "AI_MAX_OUTPUT_TOKENS", _DEFAULT_MAX_OUTPUT_TOKENS, 256, 131072
+    )
+    # 环境变量可能互相矛盾，读取时也必须保证输出预算小于上下文窗口。
+    max_output_tokens = min(max_output_tokens, context_window - 256)
 
     return ModelConfig(
         # 密钥优先级：内存运行时 > 环境变量
@@ -79,6 +102,10 @@ def get_model_config() -> ModelConfig:
         model=runtime_model or os.getenv("AI_MODEL", _DEFAULT_MODEL).strip(),
         timeout_seconds=_read_timeout(),
         source=source,
+        provider=runtime_provider or _read_provider_env(),
+        context_window=context_window,
+        max_output_tokens=max_output_tokens,
+        stream=runtime_stream if runtime_stream is not None else _read_bool_env("AI_STREAM", True),
     )
 
 
@@ -87,6 +114,10 @@ def set_runtime_config(
     api_key: str | None,
     api_base: str,
     model: str,
+    provider: str = "auto",
+    context_window: int = _DEFAULT_CONTEXT_WINDOW,
+    max_output_tokens: int = _DEFAULT_MAX_OUTPUT_TOKENS,
+    stream: bool = True,
 ) -> ModelConfig:
     """
     更新当前进程内凭据，**仅保存在内存，不写磁盘**，不向调用方返回完整密钥。
@@ -104,6 +135,7 @@ def set_runtime_config(
     # 清理接口地址，去除首尾空白，去除末尾多余斜杠
     next_base = api_base.strip().rstrip("/")
     next_model = model.strip()
+    next_provider = provider.strip() or "auto"
 
     # 参数校验：密钥不能为空
     if not next_key:
@@ -114,13 +146,24 @@ def set_runtime_config(
     # 参数校验：模型名不能为空
     if not next_model:
         raise ValueError("模型名称不能为空")
+    if next_provider not in _VALID_PROVIDERS:
+        raise ValueError(f"不支持的模型 Provider: {next_provider}")
+    if not 4096 <= context_window <= 2_000_000:
+        raise ValueError("上下文窗口必须在 4096 到 2000000 Token 之间")
+    if not 256 <= max_output_tokens < context_window:
+        raise ValueError("最大输出 Token 必须不少于 256 且小于上下文窗口")
 
     # 修改全局内存变量，加锁保证多线程并发修改安全
     global _runtime_api_key, _runtime_api_base, _runtime_model
+    global _runtime_provider, _runtime_context_window, _runtime_max_output_tokens, _runtime_stream
     with _lock:
         _runtime_api_key = next_key
         _runtime_api_base = next_base
         _runtime_model = next_model
+        _runtime_provider = next_provider
+        _runtime_context_window = int(context_window)
+        _runtime_max_output_tokens = int(max_output_tokens)
+        _runtime_stream = bool(stream)
     # 修改完成，重新读取并返回配置
     return get_model_config()
 
@@ -137,6 +180,10 @@ def public_config(config: ModelConfig | None = None) -> dict[str, object]:
         "api_base": resolved.api_base,
         "model": resolved.model,
         "source": resolved.source,
+        "provider": resolved.provider,
+        "context_window": resolved.context_window,
+        "max_output_tokens": resolved.max_output_tokens,
+        "stream": resolved.stream,
     }
 
 
@@ -161,3 +208,30 @@ def _read_timeout() -> float:
     except ValueError:
         # 环境变量不是合法数字，捕获异常回退默认60s
         return 60.0
+
+
+def _read_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
+    """读取带上下限的整数环境变量。"""
+    try:
+        return max(minimum, min(int(os.getenv(name, str(default))), maximum))
+    except ValueError:
+        return default
+
+
+def _read_bool_env(name: str, default: bool) -> bool:
+    """读取常见 true/false 表达；非法值回退默认配置。"""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _read_provider_env() -> str:
+    """非法 Provider 环境变量回退 auto，避免状态接口启动即报错。"""
+    value = os.getenv("AI_PROVIDER", "auto").strip() or "auto"
+    return value if value in _VALID_PROVIDERS else "auto"

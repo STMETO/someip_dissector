@@ -455,6 +455,7 @@ function _formatDuration(ms) {
       v-model:open="assistantOpen"
       :sessionId="sessionId"
       :pcapName="activePcapName"
+      :persistent="hasExport"
       @navigate-message="onNavigateMessage"
       @navigate-service="onNavigateService"
       @navigate-eventgroup="onNavigateEventgroup"

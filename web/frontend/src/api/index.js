@@ -78,6 +78,26 @@ export async function configureAssistant(config) {
   return data
 }
 
+export async function probeAssistant() {
+  const { data } = await api.post('/assistant/probe')
+  return data
+}
+
+export async function fetchAssistantConversation(sessionId) {
+  const { data } = await api.get(`/session/${sessionId}/assistant/conversations`)
+  return data
+}
+
+export async function setAssistantPersistence(sessionId, enabled) {
+  const { data } = await api.put(`/session/${sessionId}/assistant/persistence`, { enabled })
+  return data
+}
+
+export async function cancelAssistantRequest(sessionId, requestId) {
+  const { data } = await api.post(`/session/${sessionId}/assistant/cancel/${requestId}`)
+  return data
+}
+
 export async function askAssistant(sessionId, question, conversationId = null) {
   const { data } = await api.post(`/session/${sessionId}/assistant/chat`, {
     question,
@@ -91,11 +111,17 @@ export async function askAssistantStream(
   question,
   conversationId = null,
   onEvent = () => {},
+  options = {},
 ) {
   const response = await fetch(`/api/session/${sessionId}/assistant/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question, conversation_id: conversationId }),
+    body: JSON.stringify({
+      question,
+      conversation_id: conversationId,
+      request_id: options.requestId || null,
+    }),
+    signal: options.signal,
   })
   if (!response.ok) {
     const body = await response.json().catch(() => ({}))
@@ -117,6 +143,11 @@ export async function askAssistantStream(
       if (!line.trim()) continue
       const event = JSON.parse(line)
       if (event.type === 'error') throw new Error(event.message || 'AI 助手处理失败')
+      if (event.type === 'cancelled') {
+        const error = new Error(event.message || '请求已取消')
+        error.code = 'ASSISTANT_CANCELLED'
+        throw error
+      }
       if (event.type === 'result') finalResult = event.result
       onEvent(event)
     }

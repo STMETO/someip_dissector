@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from queue import Empty, Queue
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from typing import Any, Callable, Iterator
 from uuid import uuid4  # 生成唯一会话ID
 
@@ -22,16 +24,27 @@ from web.backend.handlers.analysis import get_session
 # 导入前面写好的配置模块
 from .config import get_model_config, public_config, set_runtime_config
 # 导入大模型客户端，自定义异常
-from .provider import ModelProviderError, create_chat_completion
+from .provider import ModelProviderError, create_chat_completion, probe_model
 from .navigation import collect_navigation_links
+from .conversation_store import (
+    load_conversations,
+    remove_conversations,
+    save_conversations,
+)
+from .providers import provider_catalog, resolve_provider
 # pydantic请求体模型，接收前端配置提交
 from .schemas import AssistantConfigRequest
+from .token_budget import (
+    ContextBudgetError,
+    build_context_plan,
+    estimate_request_tokens,
+    tokenizer_name,
+)
 # 工具定义列表、执行工具函数、工具结果序列化
 from .tools import TOOL_DEFINITIONS, execute_tool, tool_result_json
 
 
 _MAX_TOOL_ROUNDS = 4        # 单次用户提问，最多允许AI执行工具调用循环轮数，防止无限循环
-_MAX_HISTORY_MESSAGES = 12  # 内存中每个对话最多保留多少条历史消息，防止上下文无限膨胀占用token
 logger = logging.getLogger(__name__)
 
 _history_lock = Lock()      # 多线程锁，保护全局对话字典_conversations并发读写
@@ -42,7 +55,23 @@ key = (session_id, conversation_id)
     conversation_id：同一个抓包会话下，可以开启多轮独立聊天
 value = list[dict]，OpenAI格式消息历史，仅驻留内存
 """
-_conversations: dict[tuple[str, str], list[dict[str, str]]] = {}
+@dataclass
+class _ConversationState:
+    """单段对话的内存状态；API Key 和 Tool 原始结果不在此保存。"""
+
+    history: list[dict[str, str]] = field(default_factory=list)
+    context_history: list[dict[str, str]] = field(default_factory=list)
+    summary: str = ""
+    updated_at: str = ""
+    model: str = ""
+
+
+_conversations: dict[tuple[str, str], _ConversationState] = {}
+_loaded_sessions: set[str] = set()
+_persistent_sessions: set[str] = set()
+_conversation_locks: dict[tuple[str, str], Lock] = {}
+_active_requests: dict[str, tuple[str, Event]] = {}
+_active_requests_lock = Lock()
 ProgressCallback = Callable[[dict[str, Any]], None]
 
 _TOOL_PROGRESS_LABELS = {
@@ -67,9 +96,24 @@ class AssistantError(RuntimeError):
         self.status_code = status_code
 
 
+class AssistantCancelled(RuntimeError):
+    """用户主动取消当前模型请求。"""
+
+
 def status() -> dict[str, object]:
     """获取当前模型配置状态，对外脱敏接口，直接返回给前端。"""
-    return public_config()
+    config = get_model_config()
+    result = public_config(config)
+    provider = resolve_provider(config)
+    result.update({
+        "effective_provider": provider.capabilities.provider,
+        "provider_label": provider.capabilities.label,
+        "supports_tools": provider.capabilities.supports_tools,
+        "supports_stream": provider.capabilities.supports_stream,
+        "tokenizer": tokenizer_name(config.model),
+        "providers": provider_catalog(),
+    })
+    return result
 
 
 def configure(request: AssistantConfigRequest) -> dict[str, object]:
@@ -84,11 +128,32 @@ def configure(request: AssistantConfigRequest) -> dict[str, object]:
             api_key=request.api_key,
             api_base=request.api_base,
             model=request.model,
+            provider=request.provider,
+            context_window=request.context_window,
+            max_output_tokens=request.max_output_tokens,
+            stream=request.stream,
         )
     except ValueError as exc:
         # 参数校验失败（key为空、url非法等）转为业务异常，400返回前端
         raise AssistantError(str(exc), 400) from exc
-    return public_config(config)
+    return status()
+
+
+def probe() -> dict[str, Any]:
+    """验证当前模型的 Tool Calling 能力；该操作会产生一次最小模型请求。"""
+    config = get_model_config()
+    if not config.configured:
+        raise AssistantError("请先配置模型 API Key", 503)
+    try:
+        result = probe_model(config)
+    except ModelProviderError as exc:
+        raise AssistantError(str(exc), 502) from exc
+    return {
+        **result,
+        "provider": resolve_provider(config).capabilities.provider,
+        "model": config.model,
+        "context_window": config.context_window,
+    }
 
 
 def chat(
@@ -96,6 +161,7 @@ def chat(
     question: str,
     conversation_id: str | None = None,
     progress: ProgressCallback | None = None,
+    cancel_event: Event | None = None,
 ) -> dict[str, Any]:
     """
     用户聊天主入口函数。接收用户提问，执行完整对话+工具调用循环，返回回答结果。
@@ -115,54 +181,84 @@ def chat(
         # 没有配置api_key，返回503提示用户先配置
         raise AssistantError("请先配置模型 API Key", 503)
 
+    _ensure_session_conversations_loaded(state)
     # 没有传入对话id，则生成全新uuid作为本次对话标识
     cid = conversation_id or uuid4().hex
     # 二元key：同一个pcap(session_id)可以跑多个独立聊天(conversation_id)，互相隔离上下文
     key = (session_id, cid)
 
-    # 加锁读取历史，拷贝副本，减少锁持有时间
     with _history_lock:
-        history = list(_conversations.get(key, []))
+        conversation = _conversations.setdefault(key, _ConversationState())
+        chat_lock = _conversation_locks.setdefault(key, Lock())
 
-    # 组装完整消息：system提示词 + 历史对话 + 用户最新提问
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": _system_prompt(state, config)},
-        *history,
-        {"role": "user", "content": question.strip()},
-    ]
-    used_tools: list[dict[str, Any]] = []  # 记录本轮问答AI实际调用了哪些工具，返回给前端展示
-    _notify(progress, {
-        "type": "status",
-        "stage": "model",
-        "message": "正在分析问题并选择查询工具",
-    })
+    # 同一 conversation_id 的请求串行执行，避免并发提问互相覆盖历史。
+    with chat_lock:
+        _check_cancel(cancel_event)
+        with _history_lock:
+            history = list(conversation.context_history or conversation.history)
+            summary = conversation.summary
+        try:
+            context = build_context_plan(
+                system_prompt=_system_prompt(state, config),
+                history=history,
+                summary=summary,
+                question=question.strip(),
+                tools=TOOL_DEFINITIONS,
+                model=config.model,
+                context_window=config.context_window,
+                max_output_tokens=config.max_output_tokens,
+            )
+        except ContextBudgetError as exc:
+            raise AssistantError(str(exc), 400) from exc
 
-    try:
-        # 执行工具调用循环，拿到AI最终文本回答
-        answer = _run_tool_loop(
-            config,
-            messages,
-            session_id,
-            used_tools,
-            progress,
-        )
-    except ModelProviderError as exc:
-        # 捕获底层大模型客户端异常，封装为业务异常，502代表上游模型服务出错
-        raise AssistantError(str(exc), 502) from exc
+        _notify(progress, {
+            "type": "context",
+            "estimated_input_tokens": context.estimated_input_tokens,
+            "context_window": context.context_window,
+            "dropped_messages": context.dropped_messages,
+            "tokenizer": context.tokenizer,
+            "message": "正在分析问题并选择查询工具",
+        })
+        used_tools: list[dict[str, Any]] = []
+        try:
+            answer, usage = _run_tool_loop(
+                config,
+                list(context.messages),
+                session_id,
+                used_tools,
+                progress,
+                cancel_event,
+            )
+        except ModelProviderError as exc:
+            if cancel_event is not None and cancel_event.is_set():
+                raise AssistantCancelled("请求已取消") from exc
+            raise AssistantError(str(exc), 502) from exc
 
-    # 更新内存中的对话历史；做窗口截断，只保留最近_MAX_HISTORY_MESSAGES条，防止上下文无限变长
-    with _history_lock:
-        next_history = history + [
-            {"role": "user", "content": question.strip()},
-            {"role": "assistant", "content": answer},
-        ]
-        _conversations[key] = next_history[-_MAX_HISTORY_MESSAGES:]
+        _check_cancel(cancel_event)
+        with _history_lock:
+            next_turn = [
+                {"role": "user", "content": question.strip()},
+                {"role": "assistant", "content": answer},
+            ]
+            conversation.history = (conversation.history + next_turn)[-200:]
+            conversation.context_history = context.retained_history + next_turn
+            conversation.summary = context.summary
+            conversation.updated_at = _utc_now()
+            conversation.model = config.model
+        _save_session_conversations_if_enabled(state)
 
     return {
         "conversation_id": cid,
         "answer": answer,
         "tools": used_tools,
         "model": config.model,
+        "usage": usage,
+        "context": {
+            "estimated_input_tokens": context.estimated_input_tokens,
+            "context_window": context.context_window,
+            "dropped_messages": context.dropped_messages,
+            "tokenizer": context.tokenizer,
+        },
     }
 
 
@@ -170,6 +266,7 @@ def chat_stream(
     session_id: str,
     question: str,
     conversation_id: str | None = None,
+    request_id: str | None = None,
 ) -> Iterator[str]:
     """以 NDJSON 事件流输出工具进度和最终结果。
 
@@ -177,11 +274,26 @@ def chat_stream(
     防止长时间模型请求被代理误判为空闲连接。同步 ``chat`` 接口继续保留兼容。
     """
     events: Queue[dict[str, Any] | None] = Queue()
+    rid = request_id or uuid4().hex
+    cancel_event = Event()
+    with _active_requests_lock:
+        previous = _active_requests.get(rid)
+        if previous is not None:
+            previous[1].set()
+        _active_requests[rid] = (session_id, cancel_event)
 
     def run() -> None:
         try:
-            result = chat(session_id, question, conversation_id, events.put)
+            result = chat(
+                session_id,
+                question,
+                conversation_id,
+                events.put,
+                cancel_event,
+            )
             events.put({"type": "result", "result": result})
+        except AssistantCancelled:
+            events.put({"type": "cancelled", "message": "请求已取消"})
         except AssistantError as exc:
             events.put({
                 "type": "error",
@@ -197,6 +309,10 @@ def chat_stream(
                 "status_code": 500,
             })
         finally:
+            with _active_requests_lock:
+                current = _active_requests.get(rid)
+                if current is not None and current[1] is cancel_event:
+                    _active_requests.pop(rid, None)
             events.put(None)
 
     Thread(target=run, name="assistant-chat-stream", daemon=True).start()
@@ -211,18 +327,178 @@ def chat_stream(
         yield json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
 
 
-def clear_conversations(session_id: str) -> None:
-    """清空某一个抓包session下全部的聊天对话。关闭pcap文件时调用，释放内存。"""
+def cancel_request(request_id: str, session_id: str | None = None) -> bool:
+    """标记活动请求为取消；返回 False 表示请求已经结束或不存在。"""
+    with _active_requests_lock:
+        current = _active_requests.get(request_id)
+    if current is None:
+        return False
+    active_session_id, event = current
+    if session_id is not None and active_session_id != session_id:
+        return False
+    event.set()
+    return True
+
+
+def conversation_overview(session_id: str) -> dict[str, Any]:
+    """返回当前解析记录最近一段对话及持久化状态。"""
+    state = get_session(session_id)
+    if state is None:
+        raise AssistantError("解析会话不存在或已过期", 404)
+    _ensure_session_conversations_loaded(state)
     with _history_lock:
-        # 筛选所有key中session_id匹配的对话，全部删除
+        rows = [
+            {
+                "conversation_id": cid,
+                "history": list(conversation.history),
+                "updated_at": conversation.updated_at,
+                "model": conversation.model,
+            }
+            for (sid, cid), conversation in _conversations.items()
+            if sid == session_id
+        ]
+        enabled = session_id in _persistent_sessions
+    rows.sort(key=lambda item: item.get("updated_at", ""), reverse=True)
+    return {
+        "available": bool(getattr(state, "persistent", False)),
+        "enabled": enabled,
+        "conversation": rows[0] if rows else None,
+    }
+
+
+def set_conversation_persistence(session_id: str, enabled: bool) -> dict[str, Any]:
+    """开启或关闭对话持久化，不改变解析记录自身的保存状态。"""
+    state = get_session(session_id)
+    if state is None:
+        raise AssistantError("解析会话不存在或已过期", 404)
+    _ensure_session_conversations_loaded(state)
+    if enabled and not getattr(state, "persistent", False):
+        raise AssistantError("请先持久化保存当前解析记录，再开启 AI 对话保存", 409)
+    with _history_lock:
+        if enabled:
+            _persistent_sessions.add(session_id)
+        else:
+            _persistent_sessions.discard(session_id)
+    if enabled:
+        _save_session_conversations_if_enabled(state)
+    else:
+        remove_conversations(state.session_dir)
+    return conversation_overview(session_id)
+
+
+def remove_persisted_conversations(session_id: str) -> None:
+    """解析记录取消持久化时同步移除 AI 对话文件。"""
+    state = get_session(session_id)
+    if state is None:
+        return
+    with _history_lock:
+        _persistent_sessions.discard(session_id)
+    remove_conversations(state.session_dir)
+
+
+def clear_conversations(session_id: str, delete_persisted: bool = False) -> None:
+    """释放某个解析记录的内存对话，可选同时删除磁盘对话。"""
+    state = get_session(session_id) if delete_persisted else None
+    with _active_requests_lock:
+        active_request_ids = [
+            request_id
+            for request_id, (active_session_id, _) in _active_requests.items()
+            if active_session_id == session_id
+        ]
+        active_events = [
+            _active_requests.pop(request_id)[1]
+            for request_id in active_request_ids
+        ]
+    for event in active_events:
+        event.set()
+    with _history_lock:
         for key in [key for key in _conversations if key[0] == session_id]:
             _conversations.pop(key, None)
+            _conversation_locks.pop(key, None)
+        _loaded_sessions.discard(session_id)
+        _persistent_sessions.discard(session_id)
+    if delete_persisted and state is not None:
+        remove_conversations(state.session_dir)
 
 
 def clear_all_conversations() -> None:
     """清空进程内全部对话上下文，用于重置、调试。"""
+    with _active_requests_lock:
+        active_events = [event for _, event in _active_requests.values()]
+        _active_requests.clear()
+    for event in active_events:
+        event.set()
     with _history_lock:
         _conversations.clear()
+        _conversation_locks.clear()
+        _loaded_sessions.clear()
+        _persistent_sessions.clear()
+
+
+def _ensure_session_conversations_loaded(state: Any) -> None:
+    """每个解析记录只从磁盘恢复一次对话，避免页面并发请求重复读取。"""
+    session_id = state.session_id
+    with _history_lock:
+        if session_id in _loaded_sessions:
+            return
+        payload = load_conversations(state.session_dir)
+        if payload:
+            for row in payload.get("conversations", []):
+                if not isinstance(row, dict):
+                    continue
+                cid = str(row.get("conversation_id") or "")[:128]
+                if not cid:
+                    continue
+                history = _sanitize_history(row.get("history"))
+                context_history = _sanitize_history(
+                    row.get("context_history", history)
+                )
+                _conversations[(session_id, cid)] = _ConversationState(
+                    history=history,
+                    context_history=context_history,
+                    summary=str(row.get("summary") or "")[:20000],
+                    updated_at=str(row.get("updated_at") or ""),
+                    model=str(row.get("model") or "")[:256],
+                )
+            _persistent_sessions.add(session_id)
+        _loaded_sessions.add(session_id)
+
+
+def _save_session_conversations_if_enabled(state: Any) -> None:
+    """将当前解析记录的对话快照写盘；未启用时直接返回。"""
+    with _history_lock:
+        if state.session_id not in _persistent_sessions:
+            return
+        rows = [
+            {
+                "conversation_id": cid,
+                "history": list(conversation.history),
+                "context_history": list(conversation.context_history),
+                "summary": conversation.summary,
+                "updated_at": conversation.updated_at,
+                "model": conversation.model,
+            }
+            for (sid, cid), conversation in _conversations.items()
+            if sid == state.session_id
+        ]
+        # 同一解析记录最多保留最近 20 段对话，避免磁盘文件无限增长。
+        rows.sort(key=lambda item: item.get("updated_at", ""), reverse=True)
+        save_conversations(state.session_dir, rows[:20])
+
+
+def _sanitize_history(value: Any) -> list[dict[str, str]]:
+    """只恢复 user/assistant 文本，拒绝磁盘文件注入 system 或 tool 消息。"""
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}:
+            continue
+        result.append({
+            "role": item["role"],
+            "content": str(item.get("content") or "")[:50000],
+        })
+    return result[-200:]
 
 
 def _run_tool_loop(
@@ -231,7 +507,8 @@ def _run_tool_loop(
     session_id: str,
     used_tools: list[dict[str, Any]],
     progress: ProgressCallback | None = None,
-) -> str:
+    cancel_event: Event | None = None,
+) -> tuple[str, dict[str, int]]:
     """
     【核心工具调用循环】
     多轮往复：调用大模型 → 如果AI要调用工具，本地执行工具，把tool结果塞回messages，再次请求大模型
@@ -240,20 +517,53 @@ def _run_tool_loop(
     :param messages: 完整消息上下文，会在循环中不断追加assistant、tool消息
     :param session_id: 抓包会话id，传给execute_tool，让工具读取pcap报文
     :param used_tools: output参数，记录调用过的工具，回传给前端展示
-    :return str: AI最终输出给用户的文本答案
+    :return: AI 最终文本和各轮模型请求累计 usage
     """
+    usage_total: dict[str, int] = {}
     # 循环上限：最多跑 _MAX_TOOL_ROUNDS+1 次大模型请求，防止死循环
     for _ in range(_MAX_TOOL_ROUNDS + 1):
-        # 请求大模型，传入全部上下文 + 全部工具定义
-        model_message = create_chat_completion(config, messages, TOOL_DEFINITIONS)
+        _check_cancel(cancel_event)
+        round_input_tokens = estimate_request_tokens(
+            messages,
+            TOOL_DEFINITIONS,
+            config.model,
+        )
+        if round_input_tokens + config.max_output_tokens + 256 > config.context_window:
+            raise ModelProviderError(
+                "Tool 返回结果使当前请求超过模型上下文窗口，请缩小查询范围或调高上下文配置"
+            )
+        # 每一轮模型请求可能先输出文本再决定调用 Tool，前端以 reset 区分轮次。
+        _notify(progress, {"type": "text_reset"})
+        emitted_text = False
+
+        def on_text_delta(delta: str) -> None:
+            nonlocal emitted_text
+            _check_cancel(cancel_event)
+            emitted_text = True
+            _notify(progress, {"type": "text_delta", "delta": delta})
+
+        model_message = create_chat_completion(
+            config,
+            messages,
+            TOOL_DEFINITIONS,
+            on_text_delta=on_text_delta,
+            cancel_event=cancel_event,
+        )
+        _merge_usage(usage_total, model_message.get("_usage"))
         tool_calls = model_message.get("tool_calls") or []
 
         # 没有工具调用，直接拿到最终回答，退出循环返回文本
         if not tool_calls:
             content = _message_content(model_message.get("content"))
             if content:
-                return content
+                # 关闭流式或兼容接口没有增量时，仍通过统一事件显示完整回答。
+                if not emitted_text:
+                    _notify(progress, {"type": "text_delta", "delta": content})
+                return content, usage_total
             raise ModelProviderError("模型没有返回可显示的回答")
+
+        # Tool Calling 轮次产生的临时文本不属于最终回答，立即清空预览。
+        _notify(progress, {"type": "text_reset"})
 
         # AI返回要调用工具，组装assistant消息，追加进上下文
         assistant_message = {
@@ -285,6 +595,7 @@ def _run_tool_loop(
             except Exception as exc:
                 # 工具执行报错，错误信息作为工具返回结果传给大模型，AI可以感知工具失败
                 result = {"error": str(exc)}
+            _check_cancel(cancel_event)
             tool_ok = "error" not in result
             # 记录本次调用的工具，用于前端展示
             tool_record = {
@@ -313,6 +624,24 @@ def _run_tool_loop(
 
     # 循环耗尽最大次数，抛出异常
     raise ModelProviderError("工具调用次数超过限制")
+
+
+def _merge_usage(target: dict[str, int], value: Any) -> None:
+    """合并不同模型轮次的 Token usage，忽略非整数扩展字段。"""
+    if not isinstance(value, dict):
+        return
+    for key, item in value.items():
+        if isinstance(item, int) and not isinstance(item, bool):
+            target[key] = target.get(key, 0) + item
+
+
+def _check_cancel(cancel_event: Event | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise AssistantCancelled("请求已取消")
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _notify(
