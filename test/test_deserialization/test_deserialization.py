@@ -10,8 +10,8 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from utils.logger import setup_logging, get_logger
-from arxml_parsers import ArxmlParser, TypeFactory, ServiceRegistry
-from deserialization import DeserializationEngine
+from someip.arxml_parsers import ArxmlParser, TypeFactory, ServiceRegistry
+from someip.deserialization import DeserializationEngine
 
 logger = get_logger(__name__)
 

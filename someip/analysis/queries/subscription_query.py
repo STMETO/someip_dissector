@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from analysis.sd_diagnostic import build_subscription_report
+from someip.analysis.sd_diagnostic import build_subscription_report
 
 from .evidence import (
     build_message_evidence,

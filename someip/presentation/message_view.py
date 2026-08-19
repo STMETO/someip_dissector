@@ -9,8 +9,8 @@ bytes，用于补齐 offset / byte_size / raw hex。
 from __future__ import annotations
 from typing import Any
 
-from deserialization.field_node import FieldNode
-from pcap_parsers.common import message_type_label
+from someip.deserialization.field_node import FieldNode
+from someip.pcap_parsers.common import message_type_label
 
 # ---- SOME/IP Return Code 枚举 ----
 _RETURN_CODE_LABELS: dict[int, str] = {

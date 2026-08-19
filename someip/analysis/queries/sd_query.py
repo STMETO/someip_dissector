@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from analysis.sd_diagnostic import extract_sd_records
+from someip.analysis.sd_diagnostic import extract_sd_records
 
 _CATEGORIES = (
     "offers",

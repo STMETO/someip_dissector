@@ -28,11 +28,11 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from utils.logger import setup_logging, get_logger
-from pcap_parsers.parser import SomeIpPcapParser, write_result_json
-from pcap_parsers.strategies import UdpSomeIpStrategy, TcpSomeIpStrategy
-from arxml_parsers import ArxmlParser, TypeFactory, ServiceRegistry
-from arxml_parsers.exporter import export_arxml_report
-from deserialization import DeserializationEngine
+from someip.pcap_parsers.parser import SomeIpPcapParser, write_result_json
+from someip.pcap_parsers.strategies import UdpSomeIpStrategy, TcpSomeIpStrategy
+from someip.arxml_parsers import ArxmlParser, TypeFactory, ServiceRegistry
+from someip.arxml_parsers.exporter import export_arxml_report
+from someip.deserialization import DeserializationEngine
 
 logger = get_logger(__name__)
 

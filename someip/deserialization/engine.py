@@ -7,9 +7,9 @@
 from __future__ import annotations
 from typing import Any
 
-from datatypes.types import DataType
-from deserialization.field_node import FieldNode
-from pcap_parsers.common import (
+from someip.datatypes.types import DataType
+from someip.deserialization.field_node import FieldNode
+from someip.pcap_parsers.common import (
     EVENT_ID_MASK,
     SOMEIP_SD_SERVICE_ID,
     get_msg_direction,

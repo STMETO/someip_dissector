@@ -8,8 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from analysis.sd_diagnostic import build_subscription_report
-from analysis.queries import MessageQuery, ensure_session_queries
+from someip.analysis.sd_diagnostic import build_subscription_report
+from someip.analysis.queries import MessageQuery, ensure_session_queries
 from assistant.tools import TOOL_DEFINITIONS, execute_tool
 from web.backend.handlers.analysis import _sessions, get_session
 from web.backend.handlers.sd_diagnostic import get_subscription_report

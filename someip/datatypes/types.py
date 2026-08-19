@@ -16,7 +16,7 @@ FieldNode = None  # type: ignore  # 占位，实际通过 _import_field_node() �
 
 def _import_field_node():
     """延迟导入 FieldNode，避免 arxml_parsers ↔ deserialization 循环依赖。"""
-    from deserialization.field_node import FieldNode
+    from someip.deserialization.field_node import FieldNode
     return FieldNode
 
 

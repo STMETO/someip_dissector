@@ -11,12 +11,12 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-from pcap_parsers.common import (
+from someip.pcap_parsers.common import (
     EVENT_ID_MASK,
     SOMEIP_SD_SERVICE_ID,
     message_type_label,
 )
-from presentation.message_view import build_message_raw_view
+from someip.presentation.message_view import build_message_raw_view
 
 
 def render_messages_for_frontend(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

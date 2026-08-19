@@ -32,7 +32,7 @@ from assistant import (
     set_conversation_persistence,
     status as assistant_status,
 )
-from analysis.queries import ensure_session_queries
+from someip.analysis.queries import ensure_session_queries
 
 from web.backend.handlers.analysis import (
     clear_all_sessions,
@@ -44,7 +44,7 @@ from web.backend.handlers.analysis import (
     run_upload_and_parse,
     unpersist_session,
 )
-from presentation import build_message_detail_from_message, build_message_summaries
+from someip.presentation import build_message_detail_from_message, build_message_summaries
 from web.backend.handlers.sd_diagnostic import get_subscription_report
 from web.backend.handlers.signal_timing import get_signal_data, get_signal_meta
 

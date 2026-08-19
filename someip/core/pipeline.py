@@ -19,12 +19,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from arxml_parsers import ArxmlParser, ServiceRegistry, TypeFactory
-from arxml_parsers.exporter import export_arxml_report
-from deserialization import DeserializationEngine
-from pcap_parsers.common import SOMEIP_SD_SERVICE_ID
-from pcap_parsers.parser import SomeIpPcapParser
-from pcap_parsers.strategies import TcpSomeIpStrategy, UdpSomeIpStrategy
+from someip.arxml_parsers import ArxmlParser, ServiceRegistry, TypeFactory
+from someip.arxml_parsers.exporter import export_arxml_report
+from someip.deserialization import DeserializationEngine
+from someip.pcap_parsers.common import SOMEIP_SD_SERVICE_ID
+from someip.pcap_parsers.parser import SomeIpPcapParser
+from someip.pcap_parsers.strategies import TcpSomeIpStrategy, UdpSomeIpStrategy
 from utils.logger import get_logger
 
 logger = get_logger(__name__)

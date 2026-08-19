@@ -9,7 +9,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from utils.logger import setup_logging, get_logger
-from pcap_parsers import parse_someip_pcap, write_result_json
+from someip.pcap_parsers import parse_someip_pcap, write_result_json
 
 logger = get_logger(__name__)
 

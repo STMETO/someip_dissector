@@ -1,6 +1,6 @@
 from .arxml_parser import ArxmlParser, RawBaseType, RawDataType
 from .exporter import export_arxml_report
-from datatypes.types import (
+from someip.datatypes.types import (
     ArrayType,
     BaseType,
     BoolType,

@@ -11,7 +11,7 @@ import re
 from typing import ClassVar
 
 from .arxml_parser import RawBaseType, RawDataType
-from datatypes.types import (
+from someip.datatypes.types import (
     ArrayType,
     BaseType,
     BoolType,

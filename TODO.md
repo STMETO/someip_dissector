@@ -24,7 +24,7 @@
 
 ## 第三阶段：统一查询层（已完成）
 
-- [x] 将页面 API 与 AI Tool 的共用查询逻辑抽取到 `analysis/queries/`。
+- [x] 将页面 API 与 AI Tool 的共用查询逻辑抽取到 `someip/analysis/queries/`。
 - [x] 增加服务、Offer、订阅、消息、信号和证据查询模块，避免重复遍历大型抓包。
 - [x] 为会话建立只读索引，缓存 Service、Method、SD Entry、IP、状态和时间戳映射。
 - [x] 增加 `get_notification_statistics`，支持通知间隔与信号字段数值统计。
@@ -76,7 +76,7 @@
 - [ ] `get_anomaly_details`：按异常类型展开受影响服务、EventGroup、客户端、时间范围和代表报文。
 - [ ] `compare_sessions`：比较两组已解析记录的服务、Offer、订阅、通知数量和异常差异。
 - [ ] 为跨会话 Tool 增加显式会话白名单，模型只能访问当前页面仍可见或用户明确选择的解析记录。
-- [ ] 为每个新增 Tool 延续“一文件一工具”，复用 `analysis/queries/`，禁止在 Tool 内重新遍历完整抓包。
+- [ ] 为每个新增 Tool 延续“一文件一工具”，复用 `someip/analysis/queries/`，禁止在 Tool 内重新遍历完整抓包。
 - [ ] 为新增 Tool 补充 Schema、参数边界、结果上限、证据链接和真实抓包回归测试。
 
 ## 第七阶段：上下文与知识增强（中期计划）

@@ -6,7 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from pcap_parsers.common import SOMEIP_SD_SERVICE_ID, is_notification, message_type_label
+from someip.pcap_parsers.common import SOMEIP_SD_SERVICE_ID, is_notification, message_type_label
 
 from .evidence import (
     build_message_evidence,

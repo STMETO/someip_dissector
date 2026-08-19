@@ -6,6 +6,6 @@ older imports working while new code imports from the presentation package.
 """
 from __future__ import annotations
 
-from presentation.message_view import build_message_raw_view
+from someip.presentation.message_view import build_message_raw_view
 
 __all__ = ["build_message_raw_view"]

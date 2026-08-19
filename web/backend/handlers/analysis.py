@@ -17,10 +17,10 @@ from typing import Any
 from fastapi import UploadFile
 from starlette.concurrency import run_in_threadpool
 
-from analysis.queries import SessionQueries
-from arxml_parsers import ArxmlParser, ServiceRegistry
-from core.pipeline import run_parse_pipeline, save_pipeline_exports
-from presentation import (
+from someip.analysis.queries import SessionQueries
+from someip.arxml_parsers import ArxmlParser, ServiceRegistry
+from someip.core.pipeline import run_parse_pipeline, save_pipeline_exports
+from someip.presentation import (
     render_messages_for_frontend,
 )
 from web.backend.handlers.upload import cleanup_session, validate_and_save

@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from analysis.queries import ensure_session_queries
-from analysis.queries.evidence import (
+from someip.analysis.queries import ensure_session_queries
+from someip.analysis.queries.evidence import (
     build_message_evidence,
     format_hex,
     header_int,
@@ -18,7 +18,7 @@ from analysis.queries.evidence import (
     structured_int,
 )
 # SOME/IP常量，事件ID掩码；把method_id里的event id剥离出来
-from pcap_parsers.common import EVENT_ID_MASK, message_type_label
+from someip.pcap_parsers.common import EVENT_ID_MASK, message_type_label
 # 获取当前pcap解析会话session
 from web.backend.handlers.analysis import get_session
 

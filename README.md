@@ -66,11 +66,32 @@ npm run build
 ```
 someip_dissector/
 │
-├── pcap_parsers/                       # SOME/IP 报文解析 + TP 分片重组
-│   ├── common.py                       # TypedDict 类型、校验、msg_type 统一映射
-│   ├── strategies.py                   # 策略模式：UDP 单包 / TCP 流重组
-│   ├── parser.py                       # 调度器 + TP 重组 + SD 解析
-│   └── message_view.py                 # 兼容包装：转发到 presentation.message_view
+├── someip/                             # SOME/IP 协议领域能力
+│   ├── __init__.py                     # 协议领域包入口
+│   ├── core/                           # ARXML → PCAP → Payload 全链路编排
+│   │   └── pipeline.py
+│   ├── pcap_parsers/                   # SOME/IP 报文解析、SD 与 TP 分片重组
+│   │   ├── common.py                   # 类型、校验和 msg_type 统一映射
+│   │   ├── strategies.py               # UDP 单包 / TCP 流策略
+│   │   ├── parser.py                   # 解析调度器
+│   │   └── message_view.py             # 展示视图兼容入口
+│   ├── arxml_parsers/                  # ARXML 服务定义编译
+│   │   ├── arxml_parser.py
+│   │   ├── type_factory.py
+│   │   ├── service_registry.py
+│   │   └── exporter.py
+│   ├── datatypes/                      # Payload 数据类型体系
+│   │   └── types.py
+│   ├── deserialization/                # 二进制 Payload 反序列化
+│   │   ├── engine.py
+│   │   └── field_node.py
+│   ├── analysis/                       # 信号分析与 SD 诊断查询
+│   │   ├── signal_utils.py
+│   │   ├── sd_diagnostic.py
+│   │   └── queries/                    # 页面与 AI 共用的会话级查询层
+│   └── presentation/                   # 展示树和 API 视图模型
+│       ├── message_view.py
+│       └── api_views.py
 │
 ├── assistant/                          # AI 问答编排层（不依赖具体 Web 页面）
 │   ├── __init__.py                     # 唯一公共入口，屏蔽内部目录变化
@@ -82,40 +103,6 @@ someip_dissector/
 │   ├── answering/                      # Prompt、回答契约和证据链接校验
 │   ├── tools/                          # Tool 注册表、公共校验和独立查询工具
 │   └── evaluation/                     # 固定诊断评测集和加载器
-│
-├── core/                               # 全链路解析编排层（不依赖 Web）
-│   └── pipeline.py                     # ARXML 编译 → PCAP 解析 → Payload 反序列化
-│
-├── presentation/                       # 展示/API 视图模型层
-│   ├── message_view.py                 # 原始数据展示树：msg dict → FieldNode
-│   └── api_views.py                    # Message summary/detail/raw_view/message_kind
-│
-├── datatypes/                          # 共享数据类型体系
-│   └── types.py                        # DataType 类族（BaseType/BoolType/
-│                                       #   StringType/StructureType/ArrayType）
-│
-├── arxml_parsers/                      # ARXML 服务定义编译
-│   ├── arxml_parser.py                 # lxml 提取全部 ARXML 元素
-│   ├── type_factory.py                 # Factory + Builder → DataType 对象池
-│   ├── service_registry.py             # Registry：O(1) 查表 + ID→名称映射
-│   └── exporter.py                     # 中间产物 JSON 导出
-│
-├── deserialization/                    # 二进制 Payload 反序列化
-│   ├── engine.py                       # 引擎：ID 查表 → 类型匹配 → 递归解析
-│   └── field_node.py                   # 解析树节点（leaf / container）
-│
-├── analysis/                           # 信号分析模块
-│   ├── signal_utils.py                 # 字段提取 + 跳变检测
-│   ├── sd_diagnostic.py                # SD 订阅诊断（Offer→Subscribe→Notify 链路）
-│   └── queries/                        # 页面 API 与 AI 共用的会话级查询层
-│       ├── __init__.py                 # SessionQueries 聚合入口和兼容补建
-│       ├── evidence.py                 # Header 真值、时间过滤和报文证据
-│       ├── message_query.py            # 消息只读索引与组合检索
-│       ├── sd_query.py                 # SD Entry 分类和 Service 索引
-│       ├── service_query.py            # ARXML/抓包/诊断服务查询
-│       ├── offer_query.py              # Offer 生命周期查询
-│       ├── subscription_query.py       # 订阅报告和生命周期查询
-│       └── signal_query.py             # Notification、曲线与 Payload 字段查询
 │
 ├── utils/                              # 工具模块
 │   └── logger.py                       # 统一日志：控制台 + RotatingFileHandler
@@ -161,19 +148,19 @@ someip_dissector/
 
 ## 阅读顺序
 
-### pcap_parsers
+### someip/pcap_parsers
 `common.py` → `strategies.py` → `parser.py`
 
-### core / presentation
-`core/pipeline.py` → `presentation/message_view.py` → `presentation/api_views.py`
+### someip/core / presentation
+`someip/core/pipeline.py` → `someip/presentation/message_view.py` → `someip/presentation/api_views.py`
 
-### arxml_parsers
+### someip/arxml_parsers
 `arxml_parser.py` → `type_factory.py` → `service_registry.py`
 
-### deserialization
+### someip/deserialization
 `field_node.py` → `engine.py`
 
-### analysis
+### someip/analysis
 `signal_utils.py` → `sd_diagnostic.py` → `queries/__init__.py` → 各领域 Query
 
 ### assistant
@@ -409,13 +396,13 @@ python test/main.py
 
 | 模式 | 位置 | 说明 |
 |------|------|------|
-| **策略模式** | `pcap_parsers/strategies.py` | UDP / TCP 传输层解析可插拔 |
-| **工厂 + Builder** | `arxml_parsers/type_factory.py` | CATEGORY → Builder → DataType |
-| **注册表** | `arxml_parsers/service_registry.py` | O(1) 查表 + ID → 名称映射 |
-| **流式反序列化** | `deserialization/` | 返回 `(FieldNode, consumed_bytes)` |
-| **递归组合** | `datatypes/types.py` | Struct/Array 嵌套 DataType |
-| **管道层** | `core/pipeline.py` | 统一编排 ARXML / PCAP / Payload，独立于 Web |
-| **数据视图分离** | `presentation/` | 展示树和 API DTO 与解析逻辑解耦 |
+| **策略模式** | `someip/pcap_parsers/strategies.py` | UDP / TCP 传输层解析可插拔 |
+| **工厂 + Builder** | `someip/arxml_parsers/type_factory.py` | CATEGORY → Builder → DataType |
+| **注册表** | `someip/arxml_parsers/service_registry.py` | O(1) 查表 + ID → 名称映射 |
+| **流式反序列化** | `someip/deserialization/` | 返回 `(FieldNode, consumed_bytes)` |
+| **递归组合** | `someip/datatypes/types.py` | Struct/Array 嵌套 DataType |
+| **管道层** | `someip/core/pipeline.py` | 统一编排 ARXML / PCAP / Payload，独立于 Web |
+| **数据视图分离** | `someip/presentation/` | 展示树和 API DTO 与解析逻辑解耦 |
 | **胶水层** | `web/backend/handlers/` | handler 只处理上传、session、HTTP 适配 |
 
 ---

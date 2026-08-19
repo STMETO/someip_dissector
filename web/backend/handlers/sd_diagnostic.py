@@ -6,7 +6,7 @@ SD 订阅诊断 API — Web 胶水层。
 from __future__ import annotations
 from typing import Any
 
-from analysis.queries import ensure_session_queries
+from someip.analysis.queries import ensure_session_queries
 from web.backend.handlers.analysis import get_session
 
 

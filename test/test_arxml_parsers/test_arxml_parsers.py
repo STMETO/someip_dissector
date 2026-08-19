@@ -8,7 +8,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from utils.logger import setup_logging, get_logger
-from arxml_parsers import ArxmlParser, TypeFactory, ServiceRegistry, export_arxml_report
+from someip.arxml_parsers import ArxmlParser, TypeFactory, ServiceRegistry, export_arxml_report
 
 logger = get_logger(__name__)
 

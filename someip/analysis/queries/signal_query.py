@@ -5,7 +5,7 @@ from collections import Counter
 from statistics import median
 from typing import Any
 
-from analysis.signal_utils import (
+from someip.analysis.signal_utils import (
     collect_leaf_paths,
     detect_transitions,
     find_field_node,

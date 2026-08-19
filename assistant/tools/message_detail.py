@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from analysis.sd_diagnostic import build_message_evidence
+from someip.analysis.sd_diagnostic import build_message_evidence
 from .support import (
     header_int,
     lookup_method_or_event_name,
@@ -13,7 +13,7 @@ from .support import (
     parse_int,
     require_queries,
 )
-from pcap_parsers.common import message_type_label
+from someip.pcap_parsers.common import message_type_label
 
 _MAX_PAYLOAD_HEX_CHARS = 65_536
 _MAX_TREE_JSON_CHARS = 120_000

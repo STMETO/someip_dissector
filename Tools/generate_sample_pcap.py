@@ -1,7 +1,7 @@
 """
 Generate a sample.pcap file containing valid SOME/IP packets over UDP and TCP.
 
-自动生成 pcap 包，用于 pcap_parsers 验证。
+自动生成 pcap 包，用于 someip/pcap_parsers 验证。
 
 Usage:
     python generate_sample_pcap.py              # writes sample.pcap to OUTPUT_PATH

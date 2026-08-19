@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from pcap_parsers.common import SOMEIP_SD_SERVICE_ID, is_notification
+from someip.pcap_parsers.common import SOMEIP_SD_SERVICE_ID, is_notification
 
 _SD_SERVICE_ID = SOMEIP_SD_SERVICE_ID
 
