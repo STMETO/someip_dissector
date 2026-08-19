@@ -52,7 +52,16 @@ def find_field_node(node: dict, path_parts: list[str]) -> dict[str, Any] | None:
         return None
 
     if _name_matches(node.get("name", ""), parts[0]):
-        return _match_node(node, parts, 0)
+        matched = _match_node(node, parts, 0)
+        if matched is not None:
+            return matched
+
+        # ARXML 数组根节点和数组元素常具有相同的基础名称，例如：
+        #   ADAS_arr_DynamicObjects_2
+        #     ADAS_arr_DynamicObjects_2[0]
+        # 元数据为了生成稳定曲线会去掉 ``[0]``，形成
+        # ``ADAS_arr_DynamicObjects_2.objectId``。此时根节点虽然匹配首段，
+        # 下一段却位于数组元素内部，需要继续从子节点尝试同一路径。
     for child in node.get("children", []):
         result = _match_node(child, parts, 0)
         if result is not None:
