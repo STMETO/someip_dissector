@@ -127,7 +127,12 @@ class AssistantReliabilityTests(unittest.TestCase):
         self.assertEqual(mocked_completion.call_count, 2)
 
     def test_prompt_is_versioned_and_contains_answer_contract(self):
-        prompt = render_system_prompt(self.state, self.config, "openai_compatible")
+        prompt = render_system_prompt(
+            self.state,
+            self.config,
+            "openai_compatible",
+            [{"session_id": "allowed-session", "pcap_name": "target.pcap"}],
+        )
 
         self.assertEqual(PROMPT_VERSION, "someip-agent-v1")
         self.assertEqual(ANSWER_CONTRACT_VERSION, "diagnostic-answer-v1")
@@ -135,6 +140,8 @@ class AssistantReliabilityTests(unittest.TestCase):
         self.assertIn("项目诊断规则", prompt)
         self.assertIn("可能原因", prompt)
         self.assertIn("Tool 返回 partial 或 error", prompt)
+        self.assertIn("allowed-session", prompt)
+        self.assertIn("target.pcap", prompt)
 
     @patch("assistant.application.service.create_chat_completion")
     @patch("assistant.application.service.get_model_config")
@@ -160,10 +167,10 @@ class AssistantReliabilityTests(unittest.TestCase):
         self.assertNotIn("敏感问题正文", serialized)
         self.assertNotIn("安全回答正文", serialized)
 
-    def test_fixed_evaluation_set_covers_six_required_categories(self):
+    def test_fixed_evaluation_set_covers_base_and_extended_tools(self):
         cases = load_evaluation_cases()
 
-        self.assertEqual(len(cases), 6)
+        self.assertEqual(len(cases), 12)
         self.assertEqual(
             {case.case_id for case in cases},
             {
@@ -173,6 +180,12 @@ class AssistantReliabilityTests(unittest.TestCase):
                 "subscription-nack",
                 "subscribed-without-notification",
                 "healthy-subscription-chain",
+                "request-response-trace",
+                "ecu-service-topology",
+                "arxml-definition",
+                "payload-value-search",
+                "anomaly-details",
+                "session-comparison",
             },
         )
         for case in cases:

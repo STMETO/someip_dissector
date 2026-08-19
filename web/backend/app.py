@@ -93,6 +93,7 @@ async def stream_assistant(
             request.question,
             request.conversation_id,
             request.request_id,
+            request.comparison_session_ids,
         ),
         media_type="application/x-ndjson",
         headers={
@@ -187,6 +188,7 @@ async def ask_assistant(
             request.conversation_id,
             # 同步兼容接口也沿用前端请求 ID，便于关联脱敏运行记录。
             request_id=request.request_id,
+            comparison_session_ids=request.comparison_session_ids,
         )
     except AssistantError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc

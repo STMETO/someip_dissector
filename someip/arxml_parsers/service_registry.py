@@ -4,6 +4,7 @@ SOME/IP 服务注册表。
 作用：SOME/IP报文收发时，通过网络ID快速匹配对应的数据类型路径
 """
 from __future__ import annotations
+from copy import deepcopy
 from dataclasses import dataclass, field
 # 导入Parser产出的原始接口、部署、方法、事件数据类
 from .arxml_parser import (
@@ -36,6 +37,8 @@ class ServiceRegistry:
     _evt_name_map: dict[tuple[int, int], str] = field(default_factory=dict)
     _method_name_map: dict[tuple[int, int], str] = field(default_factory=dict)
     _eg_name_map: dict[tuple[int, int], str] = field(default_factory=dict)
+    # 公开定义查询使用的紧凑快照，避免 AI 查询依赖注册表内部索引实现。
+    _service_definitions: dict[int, dict] = field(default_factory=dict)
 
     def build(
         self,
@@ -49,6 +52,15 @@ class ServiceRegistry:
         """
         logger.info("Building registry: %d deployments, %d interfaces",
                     len(deployments), len(interfaces))
+
+        # build 允许在持久化会话恢复时复用对象，先清空旧索引避免残留定义。
+        self._method_map.clear()
+        self._event_map.clear()
+        self._svc_name_map.clear()
+        self._evt_name_map.clear()
+        self._method_name_map.clear()
+        self._eg_name_map.clear()
+        self._service_definitions.clear()
 
         # 第一步：缓存所有服务接口，兼容两种路径格式（原生路径 / 带/Package前缀路径）
         self._interface_index = {}
@@ -74,9 +86,23 @@ class ServiceRegistry:
             svc_name = _last_segment(dep.interface_ref)
             self._svc_name_map[dep.service_id] = svc_name
 
+            definition = {
+                "service_id": dep.service_id,
+                "service_name": svc_name,
+                "interface_ref": dep.interface_ref,
+                "methods": [],
+                "events": [],
+                "eventgroups": [],
+            }
+            self._service_definitions[dep.service_id] = definition
+
             # ---- 记录 EventGroup 名称 ----
             for eg in dep.event_groups:
                 self._eg_name_map[(dep.service_id, eg.event_group_id)] = eg.name
+                definition["eventgroups"].append({
+                    "eventgroup_id": eg.event_group_id,
+                    "name": eg.name,
+                })
 
             # ========== 处理RPC方法，填充_method_map ==========
             for md in dep.methods:
@@ -86,6 +112,19 @@ class ServiceRegistry:
                     continue
                 # 记录方法名称
                 self._method_name_map[(dep.service_id, md.method_id)] = method_short_name
+                definition["methods"].append({
+                    "method_id": md.method_id,
+                    "name": method_short_name,
+                    "method_ref": md.method_ref,
+                    "arguments": [
+                        {
+                            "name": arg.name,
+                            "direction": arg.direction,
+                            "type_ref": arg.type_ref,
+                        }
+                        for arg in method.arguments
+                    ],
+                })
                 for arg in method.arguments:
                     msg_type = _direction_to_msg_type(arg.direction)
                     map_key = (dep.service_id, md.method_id, msg_type)
@@ -100,6 +139,12 @@ class ServiceRegistry:
                     self._event_map[event_key] = evt.type_ref
                 # 记录事件名称
                 self._evt_name_map[(dep.service_id, ed.event_id)] = event_short_name
+                definition["events"].append({
+                    "event_id": ed.event_id,
+                    "name": event_short_name,
+                    "event_ref": ed.event_ref,
+                    "type_ref": evt.type_ref if evt is not None else "",
+                })
 
         if skipped_zero:
             logger.debug("Skipped %d deployments with service_id=0", skipped_zero)
@@ -147,6 +192,14 @@ class ServiceRegistry:
         AI 服务查找和其他展示层通过公开接口读取名称，避免依赖注册表内部字典。
         """
         return sorted(self._svc_name_map.items())
+
+    def describe_service(self, service_id: int) -> dict | None:
+        """返回服务的公开 ARXML 定义快照。
+
+        返回深拷贝，确保页面或 AI Tool 无法意外修改反序列化使用的注册表。
+        """
+        definition = self._service_definitions.get(service_id)
+        return deepcopy(definition) if definition is not None else None
 
     @property
     def method_count(self) -> int:

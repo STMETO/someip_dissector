@@ -495,6 +495,7 @@ function _formatDuration(ms) {
         :sessionId="sessionId"
         :pcapName="activePcapName"
         :persistent="hasExport"
+        :sessions="savedSessions"
         @navigate-message="onNavigateMessage"
         @navigate-service="onNavigateService"
         @navigate-eventgroup="onNavigateEventgroup"

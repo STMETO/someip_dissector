@@ -89,6 +89,28 @@ def parse_float(value: Any, field_name: str) -> float | None:
         raise ValueError(f"{field_name} 必须是数字") from exc
 
 
+def parse_text(
+    value: Any,
+    field_name: str,
+    *,
+    required: bool = False,
+    max_length: int = 512,
+) -> str | None:
+    """解析并限制模型生成的文本参数，避免超长路径或筛选值进入查询层。"""
+    if value is None or value == "":
+        if required:
+            raise ValueError(f"{field_name} 不能为空")
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} 必须是字符串")
+    normalized = value.strip()
+    if required and not normalized:
+        raise ValueError(f"{field_name} 不能为空")
+    if len(normalized) > max_length:
+        raise ValueError(f"{field_name} 长度不能超过 {max_length} 个字符")
+    return normalized or None
+
+
 def clamp_limit(value: Any, *, default: int = 50, maximum: int = 200) -> int:
     """
     限制单次工具返回报文条数limit。

@@ -41,6 +41,8 @@ class AssistantChatRequest(BaseModel):
     conversation_id: str | None = Field(default=None, max_length=128)
     # 前端生成请求ID，用于显式取消仍在后台执行的模型请求。
     request_id: str | None = Field(default=None, min_length=8, max_length=128)
+    # 只有用户在当前提问前明确勾选的记录才进入跨会话 Tool 白名单。
+    comparison_session_ids: list[str] = Field(default_factory=list, max_length=3)
 
 
 class AssistantPersistenceRequest(BaseModel):

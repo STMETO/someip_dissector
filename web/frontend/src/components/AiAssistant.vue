@@ -1,7 +1,7 @@
 <script setup>
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
-import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   askAssistantStream,
   cancelAssistantRequest,
@@ -23,6 +23,7 @@ const props = defineProps({
   sessionId: { type: String, default: '' },
   pcapName: { type: String, default: '' },
   persistent: Boolean,
+  sessions: { type: Array, default: () => [] },
 })
 
 const emit = defineEmits([
@@ -62,6 +63,11 @@ const contextStats = ref(null)
 const failedQuestion = ref('')
 const persistence = ref({ available: false, enabled: false })
 const persistenceSaving = ref(false)
+// 勾选项构成本轮请求的显式白名单；切换主会话时立即清空，避免权限串会话。
+const comparisonSessionIds = ref([])
+const comparisonOptions = computed(() => (
+  props.sessions.filter(item => item?.session_id && item.session_id !== props.sessionId)
+))
 const messageList = ref(null)
 const drawerWidth = ref(DEFAULT_DRAWER_WIDTH)
 const resizing = ref(false)
@@ -94,8 +100,14 @@ watch(() => props.sessionId, (sessionId) => {
   streamedAnswer.value = ''
   failedQuestion.value = ''
   persistence.value = { available: false, enabled: false }
+  comparisonSessionIds.value = []
   if (sessionId) loadConversation(sessionId)
 })
+
+watch(() => props.sessions, () => {
+  const available = new Set(comparisonOptions.value.map(item => item.session_id))
+  comparisonSessionIds.value = comparisonSessionIds.value.filter(id => available.has(id))
+}, { deep: true })
 
 watch(() => props.persistent, (persistent) => {
   persistence.value.available = Boolean(persistent)
@@ -247,7 +259,11 @@ async function submitQuestion(value = draft.value) {
       question,
       conversationId.value,
       onProgressEvent,
-      { signal: activeController.signal, requestId: activeRequestId },
+      {
+        signal: activeController.signal,
+        requestId: activeRequestId,
+        comparisonSessionIds: comparisonSessionIds.value,
+      },
     )
     if (props.sessionId !== submittedSessionId) return
     conversationId.value = result.conversation_id
@@ -568,6 +584,26 @@ function apiError(error, fallback) {
           >
             {{ persistenceSaving ? '设置中...' : (persistence.enabled ? '对话已保存' : '对话不保存') }}
           </button>
+          <details v-if="comparisonOptions.length" class="assistant-comparison">
+            <summary :title="'选择本轮允许 AI 比较的解析记录'">
+              对比 {{ comparisonSessionIds.length }}
+            </summary>
+            <div class="comparison-menu">
+              <strong>允许本轮比较</strong>
+              <label v-for="item in comparisonOptions" :key="item.session_id">
+                <input
+                  v-model="comparisonSessionIds"
+                  type="checkbox"
+                  :value="item.session_id"
+                  :disabled="comparisonSessionIds.length >= 3 && !comparisonSessionIds.includes(item.session_id)"
+                >
+                <span :title="item.pcap_name || item.session_id">
+                  {{ item.pcap_name || item.session_id }}
+                </span>
+              </label>
+              <small>最多选择 3 条；未勾选的记录不会授权给模型。</small>
+            </div>
+          </details>
         </section>
 
         <section class="assistant-config" :class="{ expanded: configOpen }">
@@ -870,8 +906,9 @@ body.assistant-is-resizing {
   color: var(--text-primary);
 }
 .assistant-context {
+  position: relative;
   display: grid;
-  grid-template-columns: auto minmax(72px, 1fr) minmax(0, 88px) auto;
+  grid-template-columns: auto minmax(60px, 1fr) minmax(0, 72px) auto auto;
   align-items: center;
   gap: 7px;
   min-height: 42px;
@@ -919,6 +956,68 @@ body.assistant-is-resizing {
   color: var(--success);
 }
 .conversation-persistence:disabled { cursor: not-allowed; opacity: .58; }
+.assistant-comparison {
+  position: relative;
+  font-size: 10px;
+}
+.assistant-comparison summary {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-weight: 800;
+  list-style: none;
+  white-space: nowrap;
+}
+.assistant-comparison summary::-webkit-details-marker { display: none; }
+.assistant-comparison[open] summary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.comparison-menu {
+  position: absolute;
+  z-index: 12;
+  top: calc(100% + 7px);
+  right: 0;
+  width: min(280px, calc(100vw - 28px));
+  max-height: 260px;
+  overflow: auto;
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-panel);
+  background: var(--surface-raised);
+  box-shadow: 0 12px 28px rgba(30, 38, 50, .16);
+}
+.comparison-menu > strong { font-size: 11px; }
+.comparison-menu label {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  cursor: pointer;
+}
+.comparison-menu label span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: 11px;
+  text-transform: none;
+}
+.comparison-menu > small {
+  color: var(--text-tertiary);
+  font-size: 9px;
+  white-space: normal;
+}
 .assistant-config {
   border-bottom: 1px solid var(--border);
   background: var(--surface);

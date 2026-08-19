@@ -124,6 +124,21 @@ class NavigationLinkTests(unittest.TestCase):
 
         self.assertFalse(any(item["kind"] == "service" for item in links))
 
+    def test_cross_session_comparison_does_not_create_current_session_links(self):
+        result = {
+            "comparisons": [{
+                "session_id": "target-session",
+                "services_added": [{"service_id": "0x0A01"}],
+                "evidence": {"message_index": 4, "frame_index": 104},
+            }],
+        }
+
+        self.assertEqual(collect_navigation_links("compare_sessions", {}, result), [])
+        self.assertEqual(
+            collect_verified_navigation_links("compare_sessions", {}, result),
+            [],
+        )
+
     def test_answer_link_validator_keeps_only_verified_targets(self):
         answer = (
             "[Message 4](#someip-message-4) "

@@ -87,6 +87,12 @@ _TOOL_PROGRESS_LABELS = {
     "get_message_detail": "正在读取报文详情",
     "get_notification_statistics": "正在统计 Notification",
     "get_payload_field": "正在读取 Payload 字段",
+    "get_request_response_trace": "正在关联 Request/Response",
+    "get_ecu_service_topology": "正在构建 ECU 服务拓扑",
+    "get_arxml_definition": "正在查询 ARXML 定义",
+    "search_payload_values": "正在检索 Payload 字段值",
+    "get_anomaly_details": "正在展开诊断异常",
+    "compare_sessions": "正在比较解析记录",
 }
 
 
@@ -160,6 +166,33 @@ def probe() -> dict[str, Any]:
     }
 
 
+def _resolve_comparison_sessions(
+    current_session_id: str,
+    requested_session_ids: list[str],
+) -> list[Any]:
+    """把用户明确选择的记录解析为本轮只读白名单。"""
+    if not isinstance(requested_session_ids, list):
+        raise AssistantError("comparison_session_ids 必须是数组", 400)
+    unique_ids: list[str] = []
+    for value in requested_session_ids:
+        session_id = str(value or "").strip()
+        if not session_id or session_id == current_session_id or session_id in unique_ids:
+            continue
+        if len(session_id) > 128:
+            raise AssistantError("比较会话 ID 长度不能超过 128 个字符", 400)
+        unique_ids.append(session_id)
+    if len(unique_ids) > 3:
+        raise AssistantError("一次最多允许比较三个其他解析记录", 400)
+
+    states = []
+    for session_id in unique_ids:
+        state = get_session(session_id)
+        if state is None:
+            raise AssistantError(f"比较会话不存在或已过期: {session_id}", 404)
+        states.append(state)
+    return states
+
+
 def chat(
     session_id: str,
     question: str,
@@ -167,6 +200,7 @@ def chat(
     progress: ProgressCallback | None = None,
     cancel_event: Event | None = None,
     request_id: str | None = None,
+    comparison_session_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     用户聊天主入口函数。接收用户提问，执行完整对话+工具调用循环，返回回答结果。
@@ -185,6 +219,10 @@ def chat(
     if not config.configured:
         # 没有配置api_key，返回503提示用户先配置
         raise AssistantError("请先配置模型 API Key", 503)
+    comparison_states = _resolve_comparison_sessions(
+        session_id,
+        comparison_session_ids or [],
+    )
 
     rid = request_id or uuid4().hex
     provider_name = resolve_provider(config).capabilities.provider
@@ -206,6 +244,7 @@ def chat(
             progress=progress,
             cancel_event=cancel_event,
             run_record=run_record,
+            comparison_states=comparison_states,
         )
         run_record.finish("completed")
         result["run"] = run_record.to_public_dict()
@@ -235,6 +274,7 @@ def _chat_with_run_record(
     progress: ProgressCallback | None,
     cancel_event: Event | None,
     run_record: AssistantRunRecord,
+    comparison_states: list[Any],
 ) -> dict[str, Any]:
     """在已创建运行记录的上下文中完成一次问答。"""
     _ensure_session_conversations_loaded(state)
@@ -251,7 +291,18 @@ def _chat_with_run_record(
             summary = conversation.summary
         try:
             context = build_context_plan(
-                system_prompt=render_system_prompt(state, config, provider_name),
+                system_prompt=render_system_prompt(
+                    state,
+                    config,
+                    provider_name,
+                    [
+                        {
+                            "session_id": item.session_id,
+                            "pcap_name": getattr(item, "pcap_name", ""),
+                        }
+                        for item in comparison_states
+                    ],
+                ),
                 history=history,
                 summary=summary,
                 question=question.strip(),
@@ -275,7 +326,13 @@ def _chat_with_run_record(
         executor = ToolExecutor(
             session_id,
             run_record,
-            tool_handler=execute_tool,
+            # 白名单由当前 HTTP 请求注入，模型无法通过 Tool 参数扩大访问范围。
+            tool_handler=lambda name, arguments, current_session_id: execute_tool(
+                name,
+                arguments,
+                current_session_id,
+                {item.session_id for item in comparison_states},
+            ),
             logger=logger,
         )
         try:
@@ -338,6 +395,7 @@ def chat_stream(
     question: str,
     conversation_id: str | None = None,
     request_id: str | None = None,
+    comparison_session_ids: list[str] | None = None,
 ) -> Iterator[str]:
     """以 NDJSON 事件流输出工具进度和最终结果。
 
@@ -362,6 +420,7 @@ def chat_stream(
                 events.put,
                 cancel_event,
                 rid,
+                comparison_session_ids,
             )
             events.put({"type": "result", "result": result})
         except AssistantCancelled:

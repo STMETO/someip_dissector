@@ -53,7 +53,7 @@
 
 ## 第五阶段：问答可靠性与执行治理（已完成）
 
-> 目标：先让现有八个 Tool 的调用过程可限制、可观测、可评测，再继续增加工具数量。
+> 目标：先让基础 Tool 的调用过程可限制、可观测、可评测，再继续增加工具数量。
 
 - [x] 从 `assistant/application/service.py` 抽取独立 Tool 执行器，统一处理参数校验、超时、取消、结果大小和异常转换。
 - [x] 为单次问答增加模型轮数、Tool 调用次数、单 Tool 耗时、累计 Tool 耗时和结果字节数预算。
@@ -67,24 +67,24 @@
 - [x] 建立第一版固定评测集，覆盖 Offer 冲突、无 Offer 订阅、无 Ack、Nack、订阅后无通知和正常链路。
 - [x] 为评测集记录期望调用的 Tool、必须出现的事实、禁止出现的推断和允许的证据范围。
 
-## 第六阶段：诊断 Tools 扩展（近期计划）
+## 第六阶段：诊断 Tools 扩展（已完成）
 
-- [ ] `get_request_response_trace`：按 Client ID、Session ID、Service 和 Method 关联 Request/Response，统计响应时间、缺失响应和错误码。
-- [ ] `get_ecu_service_topology`：汇总 ECU/IP 的服务提供、服务消费、订阅关系和通信方向。
-- [ ] `get_arxml_definition`：查询 Service、Method、Event、EventGroup、字段路径和数据类型定义，不向模型发送整份 ARXML。
-- [ ] `search_payload_values`：按字段路径、值、范围和时间检索反序列化结果，并返回有限报文证据。
-- [ ] `get_anomaly_details`：按异常类型展开受影响服务、EventGroup、客户端、时间范围和代表报文。
-- [ ] `compare_sessions`：比较两组已解析记录的服务、Offer、订阅、通知数量和异常差异。
-- [ ] 为跨会话 Tool 增加显式会话白名单，模型只能访问当前页面仍可见或用户明确选择的解析记录。
-- [ ] 为每个新增 Tool 延续“一文件一工具”，复用 `someip/analysis/queries/`，禁止在 Tool 内重新遍历完整抓包。
-- [ ] 为新增 Tool 补充 Schema、参数边界、结果上限、证据链接和真实抓包回归测试。
+- [x] `get_request_response_trace`：按 Client ID、Session ID、Service 和 Method 关联 Request/Response，统计响应时间、缺失响应和错误码。
+- [x] `get_ecu_service_topology`：汇总 ECU/IP 的服务提供、服务消费、订阅关系和通信方向。
+- [x] `get_arxml_definition`：查询 Service、Method、Event、EventGroup、字段路径和数据类型定义，不向模型发送整份 ARXML。
+- [x] `search_payload_values`：按字段路径、值、范围和时间检索反序列化结果，并返回有限报文证据。
+- [x] `get_anomaly_details`：按异常类型展开受影响服务、EventGroup、客户端、时间范围和代表报文。
+- [x] `compare_sessions`：比较最多四组已解析记录的服务、Offer、订阅、通知数量和异常差异。
+- [x] 为跨会话 Tool 增加显式会话白名单，模型只能访问用户在当前 AI 面板中明确选择的解析记录。
+- [x] 为每个新增 Tool 延续“一文件一工具”，复用 `someip/analysis/queries/`；Payload 字段路径使用有界懒索引。
+- [x] 为新增 Tool 补充 Schema、参数边界、结果上限、可用证据链接和真实 PCAP/ARXML 全链路回归。
 
 ## 第七阶段：上下文与知识增强（中期计划）
 
 - [ ] 将滚动摘要升级为结构化会话摘要，分别保存用户目标、已确认事实、未解决问题和最近使用的 Service/EventGroup。
 - [ ] 对“这个服务”“刚才的 EventGroup”等指代增加显式实体解析，无法唯一确定时要求用户澄清。
 - [ ] 建立 ARXML 名称、字段说明和项目诊断规则的轻量检索层，为模型提供按需上下文而不是完整配置文件。
-- [ ] 支持用户选择多组解析记录后进行对比问答，默认仍严格绑定当前会话，避免跨抓包串数据。
+- [x] 支持用户选择多组解析记录后进行对比问答，默认仍严格绑定当前会话，避免跨抓包串数据。
 - [ ] 支持把一次诊断问答整理为结构化报告，包含结论、证据、推断、未决项和后续排查建议。
 - [ ] 支持导出 Markdown/JSON 诊断报告，并在导出前允许用户选择是否包含 IP、Payload 和 ARXML 名称。
 
@@ -108,7 +108,7 @@
 
 ## 测试与质量
 
-- [x] 使用固定链路测试八个 Tool 的核心行为。
+- [x] 使用固定链路测试十四个 Tool 的核心行为。
 - [x] 使用真实 `test1.pcap` 校验订阅统计和时间线结果。
 - [x] 使用模拟模型覆盖零次、一次、多次 Tool 调用、流式分片、上游失败和主动取消。
 - [ ] 验证 DeepSeek、OpenAI、阿里云百炼和本地兼容接口。

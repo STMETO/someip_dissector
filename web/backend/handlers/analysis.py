@@ -18,7 +18,7 @@ from fastapi import UploadFile
 from starlette.concurrency import run_in_threadpool
 
 from someip.analysis.queries import SessionQueries
-from someip.arxml_parsers import ArxmlParser, ServiceRegistry
+from someip.arxml_parsers import ArxmlParser, ServiceRegistry, TypeFactory
 from someip.core.pipeline import run_parse_pipeline, save_pipeline_exports
 from someip.presentation import (
     render_messages_for_frontend,
@@ -271,7 +271,11 @@ def _parse_and_render_session(
 
     # 查询索引与完整 JSON 相互独立，只保存消息引用和字段映射，不复制 Payload。
     started = time.perf_counter()
-    queries = SessionQueries(messages, pipeline_result.registry)
+    queries = SessionQueries(
+        messages,
+        pipeline_result.registry,
+        pipeline_result.type_pool,
+    )
     timings["query_index_ms"] = _elapsed_ms(started)
 
     if persistent:
@@ -320,9 +324,9 @@ def _load_session_from_disk(session_id: str) -> _SessionState | None:
     if messages is None:
         return None
 
-    registry = _load_registry(session_dir)
+    registry, type_pool = _load_arxml_context(session_dir)
     started = time.perf_counter()
-    queries = SessionQueries(messages, registry)
+    queries = SessionQueries(messages, registry, type_pool)
     timings = dict(meta.get("timings") or {})
     timings["query_index_restore_ms"] = _elapsed_ms(started)
     state = _SessionState(
@@ -383,18 +387,22 @@ def _load_persisted_messages(session_dir: Path) -> list[dict[str, Any]] | None:
     return messages if isinstance(messages, list) else None
 
 
-def _load_registry(session_dir: Path) -> ServiceRegistry | None:
+def _load_arxml_context(
+    session_dir: Path,
+) -> tuple[ServiceRegistry | None, dict[str, Any] | None]:
+    """恢复持久化会话的注册表和类型池，保证 ARXML Tool 能查询字段定义。"""
     schema = next(session_dir.glob("schema.*"), None)
     if not schema:
-        return None
+        return None, None
     try:
         parser = ArxmlParser(schema)
         parser.parse()
+        type_pool = TypeFactory().build_all(parser.raw_base_types, parser.raw_types)
         registry = ServiceRegistry()
         registry.build(parser.raw_deployments, parser.raw_interfaces)
-        return registry
+        return registry, type_pool
     except Exception:
-        return None
+        return None, None
 
 
 def _legacy_session_meta(session_dir: Path) -> dict[str, Any] | None:

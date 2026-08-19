@@ -44,6 +44,10 @@ def _collect_navigation_links(
     *,
     include_arguments: bool,
 ) -> list[dict[str, Any]]:
+    # 跨会话结果中的 message_index/Service ID 不属于当前页面会话；现有锚点
+    # 未携带 Session ID，因此一律不生成链接，避免跳到同索引的错误报文。
+    if tool_name == "compare_sessions":
+        return []
     messages: list[dict[str, Any]] = []
     eventgroups: list[dict[str, Any]] = []
     services: list[dict[str, Any]] = []

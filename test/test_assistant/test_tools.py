@@ -9,7 +9,12 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from someip.analysis.sd_diagnostic import build_subscription_report
-from someip.analysis.queries import MessageQuery, ensure_session_queries
+from someip.analysis.queries import (
+    ArxmlDefinitionQuery,
+    MessageQuery,
+    ensure_session_queries,
+)
+from someip.datatypes.types import BaseType, StringType, StructField, StructureType
 from assistant.tools import TOOL_DEFINITIONS, execute_tool
 from web.backend.handlers.analysis import _sessions, get_session
 from web.backend.handlers.sd_diagnostic import get_subscription_report
@@ -36,6 +41,36 @@ class _Registry:
     def lookup_eventgroup_name(self, service_id, eventgroup_id):
         return "ParkingEventGroup" if (service_id, eventgroup_id) == (0x0A01, 0xA005) else None
 
+    def describe_service(self, service_id):
+        """模拟注册表公开定义接口，供 ARXML Tool 测试。"""
+        if service_id != 0x0A01:
+            return None
+        return {
+            "service_id": service_id,
+            "service_name": "ParkingService",
+            "interface_ref": "/Services/ParkingService",
+            "methods": [{
+                "method_id": 1,
+                "name": "SetParkingMode",
+                "method_ref": "/Services/ParkingService/SetParkingMode",
+                "arguments": [{
+                    "name": "mode",
+                    "direction": "IN",
+                    "type_ref": "/Types/ParkingMode",
+                }],
+            }],
+            "events": [{
+                "event_id": 0x2005,
+                "name": "ParkingState",
+                "event_ref": "/Services/ParkingService/ParkingState",
+                "type_ref": "/Types/ParkingState",
+            }],
+            "eventgroups": [{
+                "eventgroup_id": 0xA005,
+                "name": "ParkingEventGroup",
+            }],
+        }
+
 
 class AssistantToolTests(unittest.TestCase):
     @classmethod
@@ -54,7 +89,7 @@ class AssistantToolTests(unittest.TestCase):
     def tearDownClass(cls):
         _sessions.pop(_SESSION_ID, None)
 
-    def test_eight_tools_are_registered(self):
+    def test_fourteen_tools_are_registered(self):
         names = [item["function"]["name"] for item in TOOL_DEFINITIONS]
         self.assertEqual(names, [
             "get_subscription_status",
@@ -65,6 +100,12 @@ class AssistantToolTests(unittest.TestCase):
             "get_message_detail",
             "get_notification_statistics",
             "get_payload_field",
+            "get_request_response_trace",
+            "get_ecu_service_topology",
+            "get_arxml_definition",
+            "search_payload_values",
+            "get_anomaly_details",
+            "compare_sessions",
         ])
 
     def test_query_index_is_reused_by_page_and_ai(self):
@@ -169,6 +210,104 @@ class AssistantToolTests(unittest.TestCase):
         self.assertEqual(meta[0]["events"][0]["fields"], ["status.speed"])
         self.assertEqual(series["fields"][0]["points"][0]["value"], 42)
 
+    def test_request_response_trace_matches_protocol_correlation_key(self):
+        session_id = "request-response-tool-test"
+        request = _message(20, 120, 0x0A01, 1, 0x00, "10.0.0.2", "10.0.0.1", "Request")
+        response = _message(21, 121, 0x0A01, 1, 0x80, "10.0.0.1", "10.0.0.2", "Response")
+        response["header"]["session_id"] = request["header"]["session_id"]
+        response["timestamp_epoch"] = request["timestamp_epoch"] + 0.025
+        missing = _message(22, 122, 0x0A01, 2, 0x00, "10.0.0.2", "10.0.0.1", "Request")
+        _sessions[session_id] = _state(session_id, [request, response, missing])
+        try:
+            result = execute_tool("get_request_response_trace", {}, session_id)
+            self.assertEqual(result["summary"]["status_counts"], {
+                "matched": 1,
+                "missing_response": 1,
+            })
+            self.assertEqual(result["traces"][0]["response_time_ms"], 25.0)
+            self.assertEqual(result["traces"][0]["response_evidence"]["frame_index"], 121)
+        finally:
+            _sessions.pop(session_id, None)
+
+    def test_ecu_topology_arxml_definition_and_payload_search(self):
+        topology = execute_tool("get_ecu_service_topology", {}, _SESSION_ID)
+        arxml = execute_tool(
+            "get_arxml_definition",
+            {"service_id": "0x0A01", "member_kind": "event"},
+            _SESSION_ID,
+        )
+        payload = execute_tool(
+            "search_payload_values",
+            {
+                "field_path": "status.speed",
+                "service_id": "0x0A01",
+                "minimum": 40,
+                "maximum": 45,
+            },
+            _SESSION_ID,
+        )
+
+        by_ip = {row["ecu_ip"]: row for row in topology["ecus"]}
+        self.assertIn("10.0.0.1", by_ip)
+        self.assertIn("10.0.0.2", by_ip)
+        self.assertNotIn("239.0.0.1", by_ip)
+        self.assertEqual(by_ip["10.0.0.1"]["offered_services"][0]["service_id"], "0x0A01")
+        self.assertTrue(arxml["found"])
+        self.assertEqual(arxml["events"][0]["name"], "ParkingState")
+        self.assertEqual(payload["matched_message_count"], 1)
+        self.assertEqual(payload["matches"][0]["field"]["value"], 42)
+
+    def test_arxml_definition_marks_offset_after_dynamic_field_unreliable(self):
+        dynamic_text = StringType("Label", "/Types/Label")
+        speed = BaseType("Speed", "/Types/Speed", bit_length=8)
+        root = StructureType("ParkingState", "/Types/ParkingState")
+        root.add_field(StructField("label", "/Types/Label", dynamic_text))
+        root.add_field(StructField("speed", "/Types/Speed", speed))
+
+        result = ArxmlDefinitionQuery(
+            _Registry(),
+            {"/Types/ParkingState": root},
+        ).query(0x0A01, member_kind="event", field_path="speed")
+        field = result["events"][0]["type_definition"]
+
+        self.assertTrue(field["found"])
+        self.assertIsNone(field["static_offset"])
+        self.assertFalse(field["offset_reliable"])
+
+    def test_anomaly_details_and_session_comparison_enforce_whitelist(self):
+        target_session_id = "assistant-comparison-target"
+        messages = _fixture_messages()[:-1]  # 去掉 Notification，形成订阅后无通知。
+        _sessions[target_session_id] = _state(target_session_id, messages, pcap_name="target.pcap")
+        try:
+            anomaly = execute_tool(
+                "get_anomaly_details",
+                {"anomaly_type": "subscribed_without_notification"},
+                target_session_id,
+            )
+            self.assertEqual(anomaly["summary"]["anomaly_count"], 1)
+            self.assertEqual(anomaly["anomalies"][0]["eventgroup_id"], "0xA005")
+
+            with self.assertRaisesRegex(ValueError, "未获得本轮访问授权"):
+                execute_tool(
+                    "compare_sessions",
+                    {"session_ids": [target_session_id]},
+                    _SESSION_ID,
+                )
+            comparison = execute_tool(
+                "compare_sessions",
+                {"session_ids": [target_session_id]},
+                _SESSION_ID,
+                {target_session_id},
+            )
+            delta = comparison["comparisons"][0]["notification_deltas"][0]
+            self.assertEqual(delta["delta"], -1)
+            self.assertEqual(
+                comparison["comparisons"][0]["anomalies_added"][0]["anomaly_type"],
+                "subscribed_without_notification",
+            )
+        finally:
+            _sessions.pop(target_session_id, None)
+
     def test_non_monotonic_timestamps_fall_back_to_safe_filter(self):
         later = _message(20, 120, 0x0A01, 1, 0x02, "10.0.0.1", "10.0.0.2", "Notification")
         earlier = _message(21, 121, 0x0A01, 1, 0x02, "10.0.0.1", "10.0.0.2", "Notification")
@@ -208,6 +347,24 @@ class AssistantToolTests(unittest.TestCase):
     def test_unregistered_tool_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "未知工具"):
             execute_tool("run_shell", {}, _SESSION_ID)
+
+
+def _state(
+    session_id: str,
+    messages: list[dict],
+    *,
+    pcap_name: str = "fixture.pcap",
+) -> SimpleNamespace:
+    """构造带完整查询依赖的轻量 Web 会话。"""
+    return SimpleNamespace(
+        session_id=session_id,
+        session_dir=Path(f"/tmp/{session_id}"),
+        messages=messages,
+        registry=_Registry(),
+        total_messages=len(messages),
+        parsed_count=sum(message.get("parse_status") == "ok" for message in messages),
+        pcap_name=pcap_name,
+    )
 
 
 def _fixture_messages() -> list[dict]:

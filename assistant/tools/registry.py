@@ -6,8 +6,16 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
+from .anomaly_details import TOOL_DEFINITION as ANOMALY_DETAILS_DEFINITION
+from .anomaly_details import get_anomaly_details
+from .arxml_definition import TOOL_DEFINITION as ARXML_DEFINITION_DEFINITION
+from .arxml_definition import get_arxml_definition
+from .compare_sessions import TOOL_DEFINITION as COMPARE_SESSIONS_DEFINITION
+from .compare_sessions import compare_sessions
+from .ecu_service_topology import TOOL_DEFINITION as ECU_TOPOLOGY_DEFINITION
+from .ecu_service_topology import get_ecu_service_topology
 from .find_service import TOOL_DEFINITION as FIND_SERVICE_DEFINITION
 from .find_service import find_service
 from .message_detail import TOOL_DEFINITION as MESSAGE_DETAIL_DEFINITION
@@ -20,6 +28,10 @@ from .offer_timeline import TOOL_DEFINITION as OFFER_TIMELINE_DEFINITION
 from .offer_timeline import get_offer_timeline
 from .payload_field import TOOL_DEFINITION as PAYLOAD_FIELD_DEFINITION
 from .payload_field import get_payload_field
+from .payload_value_search import TOOL_DEFINITION as PAYLOAD_VALUE_SEARCH_DEFINITION
+from .payload_value_search import search_payload_values
+from .request_response_trace import TOOL_DEFINITION as REQUEST_RESPONSE_DEFINITION
+from .request_response_trace import get_request_response_trace
 from .search_messages import TOOL_DEFINITION as SEARCH_MESSAGES_DEFINITION
 from .search_messages import search_messages
 from .subscription_status import TOOL_DEFINITION as SUBSCRIPTION_STATUS_DEFINITION
@@ -118,6 +130,73 @@ def _run_payload_field(session_id: str, arguments: dict[str, Any]) -> dict[str, 
     )
 
 
+def _run_request_response_trace(
+    session_id: str,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    return get_request_response_trace(
+        session_id,
+        arguments.get("service_id"),
+        arguments.get("method_id"),
+        arguments.get("client_id"),
+        arguments.get("session_id"),
+        arguments.get("status"),
+        arguments.get("start_time"),
+        arguments.get("end_time"),
+        arguments.get("offset"),
+        arguments.get("limit"),
+    )
+
+
+def _run_ecu_topology(session_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    return get_ecu_service_topology(
+        session_id,
+        arguments.get("ecu_ip"),
+        arguments.get("service_id"),
+        arguments.get("limit"),
+    )
+
+
+def _run_arxml_definition(session_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    return get_arxml_definition(
+        session_id,
+        arguments.get("service_id"),
+        arguments.get("member_kind"),
+        arguments.get("member_id"),
+        arguments.get("field_path"),
+    )
+
+
+def _run_payload_value_search(
+    session_id: str,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    return search_payload_values(
+        session_id,
+        arguments.get("field_path"),
+        arguments.get("service_id"),
+        arguments.get("method_id"),
+        arguments.get("exact_value"),
+        arguments.get("text_contains"),
+        arguments.get("minimum"),
+        arguments.get("maximum"),
+        arguments.get("start_time"),
+        arguments.get("end_time"),
+        arguments.get("offset"),
+        arguments.get("limit"),
+    )
+
+
+def _run_anomaly_details(session_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    return get_anomaly_details(
+        session_id,
+        arguments.get("anomaly_type"),
+        arguments.get("service_id"),
+        arguments.get("offset"),
+        arguments.get("limit"),
+    )
+
+
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
     SUBSCRIPTION_STATUS_DEFINITION,
     FIND_SERVICE_DEFINITION,
@@ -127,6 +206,12 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     MESSAGE_DETAIL_DEFINITION,
     NOTIFICATION_STATISTICS_DEFINITION,
     PAYLOAD_FIELD_DEFINITION,
+    REQUEST_RESPONSE_DEFINITION,
+    ECU_TOPOLOGY_DEFINITION,
+    ARXML_DEFINITION_DEFINITION,
+    PAYLOAD_VALUE_SEARCH_DEFINITION,
+    ANOMALY_DETAILS_DEFINITION,
+    COMPARE_SESSIONS_DEFINITION,
 ]
 
 _TOOL_HANDLERS: dict[str, ToolHandler] = {
@@ -138,11 +223,30 @@ _TOOL_HANDLERS: dict[str, ToolHandler] = {
     "get_message_detail": _run_message_detail,
     "get_notification_statistics": _run_notification_statistics,
     "get_payload_field": _run_payload_field,
+    "get_request_response_trace": _run_request_response_trace,
+    "get_ecu_service_topology": _run_ecu_topology,
+    "get_arxml_definition": _run_arxml_definition,
+    "search_payload_values": _run_payload_value_search,
+    "get_anomaly_details": _run_anomaly_details,
 }
 
 
-def execute_tool(name: str, arguments: dict[str, Any], session_id: str) -> dict[str, Any]:
-    """在服务端注入的解析会话上执行已注册 Tool。"""
+def execute_tool(
+    name: str,
+    arguments: dict[str, Any],
+    session_id: str,
+    allowed_session_ids: Iterable[str] = (),
+) -> dict[str, Any]:
+    """在服务端注入的解析会话上执行已注册 Tool。
+
+    ``compare_sessions`` 额外接收本轮请求白名单；其他 Tool 永远绑定当前会话。
+    """
+    if name == "compare_sessions":
+        return compare_sessions(
+            session_id,
+            arguments.get("session_ids"),
+            allowed_session_ids,
+        )
     handler = _TOOL_HANDLERS.get(name)
     if handler is None:
         raise ValueError(f"未知工具: {name}")
@@ -156,6 +260,10 @@ def tool_result_json(result: dict[str, Any]) -> str:
 __all__ = [
     "TOOL_DEFINITIONS",
     "execute_tool",
+    "compare_sessions",
+    "get_anomaly_details",
+    "get_arxml_definition",
+    "get_ecu_service_topology",
     "find_service",
     "get_message_detail",
     "get_notification_statistics",
@@ -163,6 +271,8 @@ __all__ = [
     "get_subscription_status",
     "get_subscription_timeline",
     "get_payload_field",
+    "get_request_response_trace",
     "search_messages",
+    "search_payload_values",
     "tool_result_json",
 ]

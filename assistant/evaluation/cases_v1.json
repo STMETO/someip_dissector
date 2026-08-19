@@ -55,6 +55,60 @@
       "required_facts": ["Offer", "Subscribe", "Ack", "至少一条 Notification"],
       "forbidden_claims": ["仅凭少量 Notification 断言频率完全正常", "省略证据"],
       "allowed_evidence": ["subscription_status", "subscription_timeline.events.evidence"]
+    },
+    {
+      "case_id": "request-response-trace",
+      "category": "Request/Response 关联",
+      "question": "检查当前抓包的 RPC 请求响应时间，并列出缺失响应和 Error 返回。",
+      "expected_tools": ["get_request_response_trace"],
+      "required_facts": ["Client ID", "Session ID", "响应时间", "关联规则"],
+      "forbidden_claims": ["仅按 Method ID 关联请求与响应", "把 Request No Return 判为缺失响应"],
+      "allowed_evidence": ["request_response_trace.traces.request_evidence", "request_response_trace.traces.response_evidence"]
+    },
+    {
+      "case_id": "ecu-service-topology",
+      "category": "ECU 服务拓扑",
+      "question": "汇总当前抓包中各 ECU 提供、请求和订阅了哪些服务。",
+      "expected_tools": ["get_ecu_service_topology"],
+      "required_facts": ["ECU IP", "服务角色", "通信方向"],
+      "forbidden_claims": ["把组播地址描述成 ECU", "把普通响应等同于已观察到 Offer"],
+      "allowed_evidence": ["ecu_service_topology.ecus"]
+    },
+    {
+      "case_id": "arxml-definition",
+      "category": "ARXML 定义",
+      "question": "查询指定服务事件的 ARXML 字段类型和静态偏移定义。",
+      "expected_tools": ["find_service", "get_arxml_definition"],
+      "required_facts": ["Service ID", "成员 ID", "类型引用"],
+      "forbidden_claims": ["返回整份 ARXML", "把动态字段偏移描述为可靠运行时偏移"],
+      "allowed_evidence": ["arxml_definition"]
+    },
+    {
+      "case_id": "payload-value-search",
+      "category": "Payload 值检索",
+      "question": "查找 status.speed 字段在指定范围内的报文。",
+      "expected_tools": ["search_payload_values"],
+      "required_facts": ["字段路径", "字段值", "报文证据"],
+      "forbidden_claims": ["未查询就推断字段值", "把不存在的字段当作数值零"],
+      "allowed_evidence": ["payload_value_search.matches.evidence"]
+    },
+    {
+      "case_id": "anomaly-details",
+      "category": "异常详情",
+      "question": "展开订阅后无 Notification 的服务、EventGroup、客户端和代表证据。",
+      "expected_tools": ["get_anomaly_details"],
+      "required_facts": ["异常类型", "Service ID", "EventGroup ID", "抓包观察边界"],
+      "forbidden_claims": ["把未观察到通知直接确认为服务故障", "混淆 Nack 与未 Ack"],
+      "allowed_evidence": ["anomaly_details.anomalies.evidence"]
+    },
+    {
+      "case_id": "session-comparison",
+      "category": "解析记录比较",
+      "question": "比较已授权的两组抓包中服务、Offer、订阅、通知和异常差异。",
+      "expected_tools": ["compare_sessions"],
+      "required_facts": ["基线会话", "目标会话", "数量差异"],
+      "forbidden_claims": ["访问未授权会话", "把不同抓包时段的差异直接描述为根因"],
+      "allowed_evidence": ["session_comparison.sessions", "session_comparison.comparisons"]
     }
   ]
 }

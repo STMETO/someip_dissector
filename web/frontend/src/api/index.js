@@ -98,10 +98,16 @@ export async function cancelAssistantRequest(sessionId, requestId) {
   return data
 }
 
-export async function askAssistant(sessionId, question, conversationId = null) {
+export async function askAssistant(
+  sessionId,
+  question,
+  conversationId = null,
+  comparisonSessionIds = [],
+) {
   const { data } = await api.post(`/session/${sessionId}/assistant/chat`, {
     question,
     conversation_id: conversationId,
+    comparison_session_ids: comparisonSessionIds,
   })
   return data
 }
@@ -120,6 +126,7 @@ export async function askAssistantStream(
       question,
       conversation_id: conversationId,
       request_id: options.requestId || null,
+      comparison_session_ids: options.comparisonSessionIds || [],
     }),
     signal: options.signal,
   })

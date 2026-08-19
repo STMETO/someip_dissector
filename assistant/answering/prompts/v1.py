@@ -22,8 +22,10 @@ _TOOL_RULES = """Tool 使用规则：
 1. 涉及服务、报文、Offer、Subscribe、Ack、Nack、Notification 或订阅异常的事实必须调用 Tool。
 2. 分析深层 Payload 时优先调用 get_payload_field；只有用户明确需要整条结构时才调用 get_message_detail。
 3. Tool 返回 partial 或 error 时，保留已得到的证据，并明确列出未完成的查询，禁止补造缺失结论。
-4. 可用能力包括订阅总览、服务查找、Offer 时间线、订阅时间线、报文检索、报文详情、Notification 统计和 Payload 字段查询。
-5. Service ID 在诊断回答中同时显示十六进制形式；回答使用用户提问的语言。"""
+4. 可用能力还包括 Request/Response 追踪、ECU 拓扑、ARXML 定义、Payload 值检索、异常详情和已授权会话比较。
+5. compare_sessions 只能使用“本轮允许比较的会话”中列出的 Session ID；列表为空时不得尝试访问其他会话。
+6. 跨会话比较结果不得生成 #someip-message、#someip-service 或 #someip-eventgroup 页面锚点，因为锚点不携带 Session ID。
+7. Service ID 在诊断回答中同时显示十六进制形式；回答使用用户提问的语言。"""
 
 _ANSWER_CONTRACT = """诊断回答契约：
 1. 诊断类回答按需使用“抓包事实”“项目诊断规则”“可能原因”“查询限制”四类标题；没有对应内容时可以省略。
@@ -38,7 +40,12 @@ _ANSWER_CONTRACT = """诊断回答契约：
 6. 用户询问模型身份时只能回答上述实际模型与 Provider 配置，不得猜测具体版本或供应商。"""
 
 
-def render_system_prompt(state: Any, config: Any, provider: str) -> str:
+def render_system_prompt(
+    state: Any,
+    config: Any,
+    provider: str,
+    comparison_sessions: list[dict[str, Any]] | None = None,
+) -> str:
     """按固定版本组合角色、事实边界、Tool 规则和回答契约。"""
     sections = [
         _ROLE.format(
@@ -50,9 +57,21 @@ def render_system_prompt(state: Any, config: Any, provider: str) -> str:
         ),
         _FACT_BOUNDARY,
         _TOOL_RULES,
+        _comparison_scope(comparison_sessions or []),
         _ANSWER_CONTRACT,
     ]
     return "\n\n".join(sections)
+
+
+def _comparison_scope(sessions: list[dict[str, Any]]) -> str:
+    """把后端已校验的会话白名单注入 Prompt，模型不能自行枚举记录。"""
+    if not sessions:
+        return "本轮允许比较的会话：无。仅可查询当前解析会话。"
+    rows = [
+        f"- Session ID: {item['session_id']}，PCAP: {item.get('pcap_name') or '未知'}"
+        for item in sessions
+    ]
+    return "本轮允许比较的会话（仅限以下记录）：\n" + "\n".join(rows)
 
 
 __all__ = ["ANSWER_CONTRACT_VERSION", "PROMPT_VERSION", "render_system_prompt"]

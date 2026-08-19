@@ -216,10 +216,10 @@ python run.py web
 | `http://localhost:8000` | Web 界面 |
 | `http://localhost:8000/docs` | API 文档 (Swagger) |
 
-### AI 分析助手（MVP）
+### AI 分析助手
 
 页面右上角的 `AI 助手` 会打开当前解析会话的侧边问答面板。面板左边缘可以
-拖动调节宽度，回答按经过安全清理的 GFM Markdown 渲染。当前提供八个只读 Tool：
+拖动调节宽度，回答按经过安全清理的 GFM Markdown 渲染。当前提供十四个只读 Tool：
 
 | Tool | 作用 |
 |------|------|
@@ -231,6 +231,15 @@ python run.py web
 | `get_message_detail` | 读取指定报文的 Header、SD、Payload 和反序列化树 |
 | `get_notification_statistics` | 统计 Notification 数量、间隔、端点和可选信号字段 |
 | `get_payload_field` | 按报文索引和字段路径读取单个深层 Payload 节点 |
+| `get_request_response_trace` | 关联 Request/Response，统计响应时间、缺失响应和错误返回 |
+| `get_ecu_service_topology` | 汇总 ECU 的服务角色、订阅和通信方向 |
+| `get_arxml_definition` | 按服务和成员读取有限 ARXML 类型定义 |
+| `search_payload_values` | 按字段路径、值、范围和时间检索反序列化结果 |
+| `get_anomaly_details` | 按类型展开订阅诊断异常和代表证据 |
+| `compare_sessions` | 比较明确授权记录的服务、Offer、订阅、通知和异常差异 |
+
+跨会话比较默认关闭。用户必须在 AI 面板的“对比”菜单中明确勾选目标记录，
+后端才会把对应 Session ID 加入当前请求白名单；模型不能枚举或访问未授权记录。
 
 页面默认填充 DeepSeek 官方 OpenAI-compatible 地址和 `deepseek-v4-flash` 模型。
 不同服务商签发的 API Key 不通用，切换服务商时必须同时检查 API Key、API 地址
@@ -313,7 +322,13 @@ assistant/
     ├── search_messages.py
     ├── message_detail.py
     ├── notification_statistics.py
-    └── payload_field.py
+    ├── payload_field.py
+    ├── request_response_trace.py
+    ├── ecu_service_topology.py
+    ├── arxml_definition.py
+    ├── payload_value_search.py
+    ├── anomaly_details.py
+    └── compare_sessions.py
 ```
 
 | 文件或目录 | 职责 |
@@ -325,7 +340,7 @@ assistant/
 | `assistant/conversation/` | 管理 Token 预算、滚动摘要与对话的可选原子持久化 |
 | `assistant/execution/` | 管理 Tool 参数校验、超时、调用预算及不含敏感正文的运行记录 |
 | `assistant/answering/` | 管理版本化 Prompt、事实与推断边界及模型导航链接校验 |
-| `assistant/evaluation/` | 读取六类固定诊断评测约束，包括必需事实、禁止推断和允许证据 |
+| `assistant/evaluation/` | 读取十二类固定诊断评测约束，包括必需事实、禁止推断和允许证据 |
 | `assistant/tools/registry.py` | 汇总 Tool Schema，并通过显式白名单把调用分发到只读函数 |
 | `assistant/tools/support.py` | 集中实现 ID/时间/布尔参数解析、返回量限制、名称查询和报文证据格式 |
 | `assistant/tools/*.py` | 每个文件实现一个独立查询能力，读取服务端注入的解析会话，不接受任意文件路径 |
@@ -344,7 +359,7 @@ AiAssistant.vue
         -> 模型选择 Tool 并填写参数
       -> assistant.execution.tool_executor.ToolExecutor（预算、超时、参数与结果治理）
         -> assistant.tools.registry.execute_tool（白名单分发）
-          -> analysis.queries.SessionQueries（会话级只读索引）
+          -> someip.analysis.queries.SessionQueries（会话级只读索引）
             -> session messages / SD records / ServiceRegistry
       -> 模型根据 Tool 证据生成 Markdown 回答
       -> assistant.answering.navigation.validate_answer_navigation_links
