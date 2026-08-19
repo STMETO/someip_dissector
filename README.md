@@ -73,26 +73,15 @@ someip_dissector/
 │   └── message_view.py                 # 兼容包装：转发到 presentation.message_view
 │
 ├── assistant/                          # AI 问答编排层（不依赖具体 Web 页面）
-│   ├── __init__.py                     # 对外导出配置、问答和会话清理接口
-│   ├── config.py                       # 模型地址、模型名称和进程内 API Key
-│   ├── provider.py                     # Provider 兼容门面与模型能力探测
-│   ├── providers/                      # 可插拔模型供应商适配器与注册表
-│   ├── conversation_store.py           # AI 对话可选持久化，采用原子 JSON 写入
-│   ├── token_budget.py                 # Token 计数、上下文预算与滚动摘要
-│   ├── navigation.py                   # Tool 结构化结果到前端证据导航参数
-│   ├── schemas.py                      # 配置和对话请求的 Pydantic 模型
-│   ├── service.py                      # 对话上下文、系统提示词和 Tool Calling 循环
-│   ├── tool_support.py                 # Tool 共用参数校验、会话读取和证据格式化
-│   └── tools/                          # 一个文件实现一个只读查询 Tool
-│       ├── __init__.py                 # Tool Schema 注册表和服务端调用白名单
-│       ├── subscription_status.py      # Offer / Subscribe / Ack / Notification 总览
-│       ├── find_service.py             # 按 ID 或 ARXML 名称查找服务
-│       ├── offer_timeline.py           # Offer / StopOffer 生命周期时间线
-│       ├── subscription_timeline.py    # Subscribe / Ack / Nack / Notification 时间线
-│       ├── search_messages.py          # 按协议字段、IP 和时间范围检索报文
-│       ├── message_detail.py           # 查询单条报文 Header、SD 和 Payload 解析树
-│       ├── notification_statistics.py  # Notification 间隔与信号字段统计
-│       └── payload_field.py             # 按字段路径读取单个深层 Payload 节点
+│   ├── __init__.py                     # 唯一公共入口，屏蔽内部目录变化
+│   ├── application/                    # 对话、流式事件与模型循环编排
+│   ├── contracts/                      # FastAPI 请求参数契约
+│   ├── llm/                            # 模型配置、调用门面和供应商适配器
+│   ├── conversation/                   # 上下文预算、滚动摘要和对话存储
+│   ├── execution/                      # Tool 预算、超时、取消和运行记录
+│   ├── answering/                      # Prompt、回答契约和证据链接校验
+│   ├── tools/                          # Tool 注册表、公共校验和独立查询工具
+│   └── evaluation/                     # 固定诊断评测集和加载器
 │
 ├── core/                               # 全链路解析编排层（不依赖 Web）
 │   └── pipeline.py                     # ARXML 编译 → PCAP 解析 → Payload 反序列化
@@ -188,7 +177,7 @@ someip_dissector/
 `signal_utils.py` → `sd_diagnostic.py` → `queries/__init__.py` → 各领域 Query
 
 ### assistant
-`config.py` → `provider.py` → `service.py` → `tools/__init__.py` → 各 Tool 文件
+`application/service.py` → `llm/gateway.py` → `execution/tool_executor.py` → `tools/registry.py` → 各 Tool 文件
 
 ### web
 `handlers/analysis.py` → `app.py` → 前端 `App.vue` → 各组件
@@ -275,6 +264,21 @@ export AI_MODEL="deepseek-v4-flash"
 python run.py web
 ```
 
+第五阶段执行治理预算可以通过环境变量调整；未配置时使用下列默认值：
+
+| 环境变量 | 默认值 | 作用 |
+|----------|--------|------|
+| `AI_MAX_MODEL_ROUNDS` | `5` | 单次问答最多模型轮数，防止持续 Tool Calling |
+| `AI_MAX_TOOL_CALLS` | `12` | 单次问答最多 Tool 调用次数 |
+| `AI_TOOL_TIMEOUT_SECONDS` | `8` | 单个 Tool 等待超时秒数 |
+| `AI_TOOL_TOTAL_TIMEOUT_SECONDS` | `30` | 单次问答累计 Tool 等待预算 |
+| `AI_TOOL_RESULT_MAX_BYTES` | `524288` | 单个 Tool 返回给模型的最大字节数 |
+| `AI_TOOL_RESULTS_TOTAL_MAX_BYTES` | `2097152` | 单次问答累计 Tool 结果字节预算 |
+
+Tool 超时、参数错误或结果超限不会丢弃已取得的证据；最终回答会追加“查询限制”。
+每次问答的 `run` 字段和服务端 `assistant_run` 日志只包含轮次、耗时、结果大小与
+Token 用量，不记录 API Key、用户问题、模型答案、System Prompt 或原始 Payload。
+
 兼容接口需要实现 `POST {AI_API_BASE}/chat/completions` 并支持 Tool Calling。
 远程部署时应使用 HTTPS，并在后续加入用户认证和独立密钥存储。后续功能见
 [`TODO.md`](TODO.md)。
@@ -284,23 +288,37 @@ python run.py web
 ```text
 assistant/
 ├── __init__.py
-├── config.py
-├── conversation_store.py
-├── navigation.py
-├── provider.py
-├── token_budget.py
-├── providers/
+├── application/
+│   └── service.py
+├── contracts/
+│   └── requests.py
+├── llm/
+│   ├── config.py
+│   ├── gateway.py
+│   └── providers/
+│       ├── base.py
+│       ├── deepseek.py
+│       ├── generic.py
+│       ├── openai_compatible.py
+│       └── registry.py
+├── conversation/
+│   ├── context_budget.py
+│   └── store.py
+├── execution/
+│   ├── tool_executor.py
+│   └── run_record.py
+├── answering/
+│   ├── navigation.py
+│   └── prompts/
+│       └── v1.py
+├── evaluation/
 │   ├── __init__.py
-│   ├── base.py
-│   ├── deepseek.py
-│   ├── generic.py
-│   ├── openai_compatible.py
-│   └── registry.py
-├── schemas.py
-├── service.py
-├── tool_support.py
+│   ├── loader.py
+│   └── cases_v1.json
 └── tools/
     ├── __init__.py
+    ├── registry.py
+    ├── support.py
     ├── subscription_status.py
     ├── find_service.py
     ├── offer_timeline.py
@@ -314,36 +332,35 @@ assistant/
 | 文件或目录 | 职责 |
 |------------|------|
 | `assistant/__init__.py` | 稳定的包入口，供 FastAPI 导入助手服务，不暴露内部实现细节 |
-| `assistant/config.py` | 合并页面运行时配置、环境变量和默认值；API Key 仅驻留当前进程内存 |
-| `assistant/conversation_store.py` | 按解析记录可选保存对话文本和滚动摘要，使用临时文件原子替换 |
-| `assistant/navigation.py` | 从 Tool 结构化结果提取报文、Service、EventGroup 和信号时序导航参数 |
-| `assistant/provider.py` | Provider 兼容门面，统一模型调用和能力探测接口 |
-| `assistant/providers/` | Provider 协议、DeepSeek/通用兼容适配器、SSE 解析和注册表 |
-| `assistant/providers/base.py` | 所有厂商 Provider 直接继承的抽象基类，以及统一能力和异常定义 |
-| `assistant/providers/openai_compatible.py` | 可被组合复用的 Chat Completions、Tool Calling 和 SSE 协议客户端，不代表具体厂商 |
-| `assistant/providers/deepseek.py` | 直接继承基类，维护 DeepSeek 请求参数，并组合使用兼容协议客户端 |
-| `assistant/providers/generic.py` | 直接继承基类，为没有独立厂商规则的 OpenAI-compatible 服务提供适配 |
-| `assistant/providers/registry.py` | 根据页面显式选择或 API 域名解析实际 Provider，避免业务层出现厂商分支 |
-| `assistant/token_budget.py` | Token 计数、上下文预算、最近轮次保留和有界滚动摘要 |
-| `assistant/schemas.py` | 校验模型配置和对话请求长度、类型等 API 边界 |
-| `assistant/service.py` | 绑定解析会话与对话历史，注入系统提示词，循环处理模型 Tool Calling |
-| `assistant/tool_support.py` | 集中实现 ID/时间/布尔参数解析、返回量限制、名称查询和报文证据格式 |
-| `assistant/tools/__init__.py` | 向模型提供 Tool JSON Schema，并通过显式白名单把调用分发到只读函数 |
+| `assistant/application/` | 绑定解析会话和对话历史，编排模型循环、流式事件、取消及答案后处理 |
+| `assistant/contracts/` | 定义配置、聊天和持久化请求的 Pydantic 边界模型 |
+| `assistant/llm/` | 管理模型配置、统一调用门面、能力探测和供应商适配器 |
+| `assistant/conversation/` | 管理 Token 预算、滚动摘要与对话的可选原子持久化 |
+| `assistant/execution/` | 管理 Tool 参数校验、超时、调用预算及不含敏感正文的运行记录 |
+| `assistant/answering/` | 管理版本化 Prompt、事实与推断边界及模型导航链接校验 |
+| `assistant/evaluation/` | 读取六类固定诊断评测约束，包括必需事实、禁止推断和允许证据 |
+| `assistant/tools/registry.py` | 汇总 Tool Schema，并通过显式白名单把调用分发到只读函数 |
+| `assistant/tools/support.py` | 集中实现 ID/时间/布尔参数解析、返回量限制、名称查询和报文证据格式 |
 | `assistant/tools/*.py` | 每个文件实现一个独立查询能力，读取服务端注入的解析会话，不接受任意文件路径 |
+
+依赖方向固定为 `Web → assistant 公共入口 → application`。`application` 可以组合
+其他子包，但 `llm`、`conversation`、`execution`、`answering`、`tools` 和
+`evaluation` 不反向导入 `application`，避免模型协议、查询能力与 Web 编排重新耦合。
 
 调用链如下：
 
 ```text
 AiAssistant.vue
   -> POST /api/session/{session_id}/assistant/chat/stream（NDJSON 进度事件）
-    -> assistant.service.chat
-      -> assistant.provider.create_chat_completion
+    -> assistant.application.service.chat
+      -> assistant.llm.gateway.create_chat_completion
         -> 模型选择 Tool 并填写参数
-      -> assistant.tools.execute_tool（白名单分发）
-        -> analysis.queries.SessionQueries（会话级只读索引）
-          -> session messages / SD records / ServiceRegistry
+      -> assistant.execution.tool_executor.ToolExecutor（预算、超时、参数与结果治理）
+        -> assistant.tools.registry.execute_tool（白名单分发）
+          -> analysis.queries.SessionQueries（会话级只读索引）
+            -> session messages / SD records / ServiceRegistry
       -> 模型根据 Tool 证据生成 Markdown 回答
-      -> assistant.navigation.collect_navigation_links
+      -> assistant.answering.navigation.validate_answer_navigation_links
         -> 前端证据按钮跳转报文树、订阅诊断或信号时序
 ```
 

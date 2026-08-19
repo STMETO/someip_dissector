@@ -1,6 +1,6 @@
 """模型 Provider 兼容门面。
 
-业务编排层只依赖本文件；具体供应商行为位于 ``assistant/providers/``，新增
+业务编排层只依赖本文件；具体供应商行为位于 ``assistant/llm/providers/``，新增
 适配器时不需要修改 Tool 或 Web API。
 """
 from __future__ import annotations

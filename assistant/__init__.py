@@ -1,11 +1,11 @@
 """绑定解析会话的 SOME/IP AI 助手集成入口。"""
 
-from .schemas import (
+from .contracts.requests import (
     AssistantChatRequest,
     AssistantConfigRequest,
     AssistantPersistenceRequest,
 )
-from .service import (
+from .application.service import (
     AssistantError,
     cancel_request,
     chat,

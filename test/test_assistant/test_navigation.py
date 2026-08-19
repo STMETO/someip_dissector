@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import unittest
 
-from assistant.navigation import collect_navigation_links
+from assistant.answering.navigation import (
+    collect_navigation_links,
+    collect_verified_navigation_links,
+    validate_answer_navigation_links,
+)
 
 
 class NavigationLinkTests(unittest.TestCase):
@@ -110,6 +114,31 @@ class NavigationLinkTests(unittest.TestCase):
 
         service_ids = [item["service_id"] for item in links if item["kind"] == "service"]
         self.assertEqual(service_ids, [0x0A01])
+
+    def test_verified_links_do_not_trust_argument_only_service(self):
+        links = collect_verified_navigation_links(
+            "search_messages",
+            {"service_id": "0x0A01"},
+            {"messages": []},
+        )
+
+        self.assertFalse(any(item["kind"] == "service" for item in links))
+
+    def test_answer_link_validator_keeps_only_verified_targets(self):
+        answer = (
+            "[Message 4](#someip-message-4) "
+            "[Message 5](#someip-message-5) "
+            "[docs](https://example.com)"
+        )
+        verified = [{"kind": "message", "message_index": 4}]
+
+        sanitized, removed = validate_answer_navigation_links(answer, verified)
+
+        self.assertIn("[Message 4](#someip-message-4)", sanitized)
+        self.assertIn("Message 5", sanitized)
+        self.assertNotIn("#someip-message-5", sanitized)
+        self.assertIn("[docs](https://example.com)", sanitized)
+        self.assertEqual(removed, 1)
 
 
 if __name__ == "__main__":

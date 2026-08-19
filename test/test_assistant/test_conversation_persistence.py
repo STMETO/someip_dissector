@@ -8,8 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from assistant.config import ModelConfig
-from assistant.service import (
+from assistant.llm.config import ModelConfig
+from assistant.application.service import (
     chat,
     clear_all_conversations,
     clear_conversations,
@@ -42,9 +42,9 @@ class ConversationPersistenceTests(unittest.TestCase):
         clear_all_conversations()
         self.temp.cleanup()
 
-    @patch("assistant.service.create_chat_completion")
-    @patch("assistant.service.get_model_config")
-    @patch("assistant.service.get_session")
+    @patch("assistant.application.service.create_chat_completion")
+    @patch("assistant.application.service.get_model_config")
+    @patch("assistant.application.service.get_session")
     def test_enabled_conversation_is_saved_and_restored_without_api_key(
         self,
         mocked_session,

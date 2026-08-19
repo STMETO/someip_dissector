@@ -5,11 +5,11 @@ import json
 import unittest
 from unittest.mock import patch
 
-from assistant.config import ModelConfig
-from assistant.provider import ModelProviderError, create_chat_completion
-from assistant.providers.base import BaseProvider
-from assistant.providers.deepseek import DeepSeekProvider
-from assistant.providers.generic import GenericProvider
+from assistant.llm.config import ModelConfig
+from assistant.llm.gateway import ModelProviderError, create_chat_completion
+from assistant.llm.providers.base import BaseProvider
+from assistant.llm.providers.deepseek import DeepSeekProvider
+from assistant.llm.providers.generic import GenericProvider
 
 
 class _Response:
@@ -70,7 +70,7 @@ class ProviderTests(unittest.TestCase):
             "choices": [{"message": {"role": "assistant", "content": "ok"}}]
         })
         with patch(
-            "assistant.providers.openai_compatible.urlopen",
+            "assistant.llm.providers.openai_compatible.urlopen",
             return_value=response,
         ) as mocked:
             message = create_chat_completion(
@@ -92,7 +92,7 @@ class ProviderTests(unittest.TestCase):
             "choices": [{"message": {"role": "assistant", "content": "ok"}}]
         })
         with patch(
-            "assistant.providers.openai_compatible.urlopen",
+            "assistant.llm.providers.openai_compatible.urlopen",
             return_value=response,
         ) as mocked:
             create_chat_completion(
@@ -113,7 +113,7 @@ class ProviderTests(unittest.TestCase):
             provider="openai_compatible",
         )
         with patch(
-            "assistant.providers.openai_compatible.urlopen",
+            "assistant.llm.providers.openai_compatible.urlopen",
             return_value=response,
         ) as mocked:
             create_chat_completion(
@@ -129,7 +129,7 @@ class ProviderTests(unittest.TestCase):
         """底层编码错误必须转换成可由 FastAPI 返回的业务异常。"""
         encoding_error = UnicodeEncodeError("ascii", "密钥", 0, 1, "not ascii")
         with patch(
-            "assistant.providers.openai_compatible.urlopen",
+            "assistant.llm.providers.openai_compatible.urlopen",
             side_effect=encoding_error,
         ):
             with self.assertRaisesRegex(ModelProviderError, "HTTP Header"):
@@ -157,7 +157,7 @@ class ProviderTests(unittest.TestCase):
         ])
         deltas = []
         with patch(
-            "assistant.providers.openai_compatible.urlopen",
+            "assistant.llm.providers.openai_compatible.urlopen",
             return_value=response,
         ):
             message = create_chat_completion(

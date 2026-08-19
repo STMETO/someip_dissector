@@ -5,7 +5,7 @@ import json
 from typing import Any
 
 from analysis.sd_diagnostic import build_message_evidence
-from assistant.tool_support import (
+from .support import (
     header_int,
     lookup_method_or_event_name,
     lookup_service_name,

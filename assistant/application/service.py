@@ -5,12 +5,13 @@
 2. 实现工具调用循环：AI → 调用本地工具 → 把工具结果丢回AI，多轮往复
 3. 拼接System提示词、管理历史消息窗口、限制最大工具调用轮次
 4. 对接上层HTTP接口，向下调用config配置模块、provider大模型客户端、tools工具执行模块
-注意：所有对话只保存在内存，不落地磁盘；会话以(session_id, conversation_id)二元组做key隔离。
+注意：对话默认只保存在内存；用户显式开启保存后才写入解析记录目录。
+会话以 (session_id, conversation_id) 二元组隔离，API Key 和 Tool 原始结果不落盘。
 """
 from __future__ import annotations
 
 import json
-import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from queue import Empty, Queue
@@ -20,32 +21,35 @@ from uuid import uuid4  # 生成唯一会话ID
 
 # 项目内部模块：抓包分析session，每个浏览器标签对应一个session_id，持有pcap报文状态
 from web.backend.handlers.analysis import get_session
+from utils.logger import get_logger
 
 # 导入前面写好的配置模块
-from .config import get_model_config, public_config, set_runtime_config
+from ..llm.config import get_model_config, public_config, set_runtime_config
 # 导入大模型客户端，自定义异常
-from .provider import ModelProviderError, create_chat_completion, probe_model
-from .navigation import collect_navigation_links
-from .conversation_store import (
+from ..llm.gateway import ModelProviderError, create_chat_completion, probe_model
+from ..answering.navigation import validate_answer_navigation_links
+from ..conversation.store import (
     load_conversations,
     remove_conversations,
     save_conversations,
 )
-from .providers import provider_catalog, resolve_provider
+from ..llm.providers import provider_catalog, resolve_provider
+from ..answering.prompts import ANSWER_CONTRACT_VERSION, PROMPT_VERSION, render_system_prompt
+from ..execution.run_record import AssistantRunRecord, log_run_record
 # pydantic请求体模型，接收前端配置提交
-from .schemas import AssistantConfigRequest
-from .token_budget import (
+from ..contracts.requests import AssistantConfigRequest
+from ..conversation.context_budget import (
     ContextBudgetError,
     build_context_plan,
     estimate_request_tokens,
     tokenizer_name,
 )
-# 工具定义列表、执行工具函数、工具结果序列化
-from .tools import TOOL_DEFINITIONS, execute_tool, tool_result_json
+# Tool Schema 仍参与模型上下文预算，具体执行交由独立执行器治理。
+from ..tools import TOOL_DEFINITIONS, execute_tool
+from ..execution.tool_executor import ToolExecutionCancelled, ToolExecutor
 
 
-_MAX_TOOL_ROUNDS = 4        # 单次用户提问，最多允许AI执行工具调用循环轮数，防止无限循环
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _history_lock = Lock()      # 多线程锁，保护全局对话字典_conversations并发读写
 """
@@ -162,6 +166,7 @@ def chat(
     conversation_id: str | None = None,
     progress: ProgressCallback | None = None,
     cancel_event: Event | None = None,
+    request_id: str | None = None,
 ) -> dict[str, Any]:
     """
     用户聊天主入口函数。接收用户提问，执行完整对话+工具调用循环，返回回答结果。
@@ -181,17 +186,64 @@ def chat(
         # 没有配置api_key，返回503提示用户先配置
         raise AssistantError("请先配置模型 API Key", 503)
 
-    _ensure_session_conversations_loaded(state)
-    # 没有传入对话id，则生成全新uuid作为本次对话标识
-    cid = conversation_id or uuid4().hex
-    # 二元key：同一个pcap(session_id)可以跑多个独立聊天(conversation_id)，互相隔离上下文
-    key = (session_id, cid)
+    rid = request_id or uuid4().hex
+    provider_name = resolve_provider(config).capabilities.provider
+    run_record = AssistantRunRecord(
+        request_id=rid,
+        session_id=session_id,
+        model=config.model,
+        prompt_version=PROMPT_VERSION,
+        answer_contract_version=ANSWER_CONTRACT_VERSION,
+    )
+    try:
+        result = _chat_with_run_record(
+            state=state,
+            config=config,
+            provider_name=provider_name,
+            session_id=session_id,
+            question=question,
+            conversation_id=conversation_id,
+            progress=progress,
+            cancel_event=cancel_event,
+            run_record=run_record,
+        )
+        run_record.finish("completed")
+        result["run"] = run_record.to_public_dict()
+        return result
+    except AssistantCancelled:
+        run_record.finish("cancelled", "cancelled")
+        raise
+    except AssistantError as exc:
+        run_record.finish("failed", f"http_{exc.status_code}")
+        raise
+    except Exception:
+        run_record.finish("failed", "internal_error")
+        raise
+    finally:
+        # 结构化日志只包含指标，不包含问题、答案、Prompt、Tool 结果或密钥。
+        log_run_record(logger, run_record)
 
+
+def _chat_with_run_record(
+    *,
+    state: Any,
+    config: Any,
+    provider_name: str,
+    session_id: str,
+    question: str,
+    conversation_id: str | None,
+    progress: ProgressCallback | None,
+    cancel_event: Event | None,
+    run_record: AssistantRunRecord,
+) -> dict[str, Any]:
+    """在已创建运行记录的上下文中完成一次问答。"""
+    _ensure_session_conversations_loaded(state)
+    cid = conversation_id or uuid4().hex
+    key = (session_id, cid)
     with _history_lock:
         conversation = _conversations.setdefault(key, _ConversationState())
         chat_lock = _conversation_locks.setdefault(key, Lock())
 
-    # 同一 conversation_id 的请求串行执行，避免并发提问互相覆盖历史。
     with chat_lock:
         _check_cancel(cancel_event)
         with _history_lock:
@@ -199,7 +251,7 @@ def chat(
             summary = conversation.summary
         try:
             context = build_context_plan(
-                system_prompt=_system_prompt(state, config),
+                system_prompt=render_system_prompt(state, config, provider_name),
                 history=history,
                 summary=summary,
                 question=question.strip(),
@@ -220,21 +272,40 @@ def chat(
             "message": "正在分析问题并选择查询工具",
         })
         used_tools: list[dict[str, Any]] = []
+        executor = ToolExecutor(
+            session_id,
+            run_record,
+            tool_handler=execute_tool,
+            logger=logger,
+        )
         try:
-            answer, usage = _run_tool_loop(
+            answer, verified_links = _run_tool_loop(
                 config,
                 list(context.messages),
-                session_id,
                 used_tools,
+                executor,
+                run_record,
                 progress,
                 cancel_event,
             )
+        except ToolExecutionCancelled as exc:
+            raise AssistantCancelled("请求已取消") from exc
         except ModelProviderError as exc:
             if cancel_event is not None and cancel_event.is_set():
                 raise AssistantCancelled("请求已取消") from exc
             raise AssistantError(str(exc), 502) from exc
 
         _check_cancel(cancel_event)
+        answer, invalid_link_count = validate_answer_navigation_links(
+            answer, verified_links
+        )
+        run_record.invalid_navigation_link_count = invalid_link_count
+        answer, limit_notice_added = _ensure_query_limit_notice(answer, used_tools)
+        if invalid_link_count or limit_notice_added:
+            # 流式预览可能已经收到模型原文，重置后只展示校验后的最终答案。
+            _notify(progress, {"type": "text_reset"})
+            _notify(progress, {"type": "text_delta", "delta": answer})
+
         with _history_lock:
             next_turn = [
                 {"role": "user", "content": question.strip()},
@@ -252,7 +323,7 @@ def chat(
         "answer": answer,
         "tools": used_tools,
         "model": config.model,
-        "usage": usage,
+        "usage": dict(run_record.token_usage),
         "context": {
             "estimated_input_tokens": context.estimated_input_tokens,
             "context_window": context.context_window,
@@ -290,6 +361,7 @@ def chat_stream(
                 conversation_id,
                 events.put,
                 cancel_event,
+                rid,
             )
             events.put({"type": "result", "result": result})
         except AssistantCancelled:
@@ -504,25 +576,27 @@ def _sanitize_history(value: Any) -> list[dict[str, str]]:
 def _run_tool_loop(
     config: Any,
     messages: list[dict[str, Any]],
-    session_id: str,
     used_tools: list[dict[str, Any]],
+    executor: ToolExecutor,
+    run_record: AssistantRunRecord,
     progress: ProgressCallback | None = None,
     cancel_event: Event | None = None,
-) -> tuple[str, dict[str, int]]:
+) -> tuple[str, list[dict[str, Any]]]:
     """
     【核心工具调用循环】
     多轮往复：调用大模型 → 如果AI要调用工具，本地执行工具，把tool结果塞回messages，再次请求大模型
     循环有最大轮次保护，避免AI无限调用工具死循环。
     :param config: 模型配置
     :param messages: 完整消息上下文，会在循环中不断追加assistant、tool消息
-    :param session_id: 抓包会话id，传给execute_tool，让工具读取pcap报文
     :param used_tools: output参数，记录调用过的工具，回传给前端展示
-    :return: AI 最终文本和各轮模型请求累计 usage
+    :param executor: 单次问答共享的 Tool 预算执行器
+    :return: AI 最终文本和可验证的导航证据
     """
-    usage_total: dict[str, int] = {}
-    # 循环上限：最多跑 _MAX_TOOL_ROUNDS+1 次大模型请求，防止死循环
-    for _ in range(_MAX_TOOL_ROUNDS + 1):
+    verified_links: list[dict[str, Any]] = []
+    # 最后一轮必须给模型机会整合 Tool 结果；持续调用 Tool 会被模型轮数预算终止。
+    for _ in range(executor.budget.max_model_rounds):
         _check_cancel(cancel_event)
+        run_record.model_rounds += 1
         round_input_tokens = estimate_request_tokens(
             messages,
             TOOL_DEFINITIONS,
@@ -549,7 +623,7 @@ def _run_tool_loop(
             on_text_delta=on_text_delta,
             cancel_event=cancel_event,
         )
-        _merge_usage(usage_total, model_message.get("_usage"))
+        run_record.add_usage(model_message.get("_usage"))
         tool_calls = model_message.get("tool_calls") or []
 
         # 没有工具调用，直接拿到最终回答，退出循环返回文本
@@ -559,7 +633,7 @@ def _run_tool_loop(
                 # 关闭流式或兼容接口没有增量时，仍通过统一事件显示完整回答。
                 if not emitted_text:
                     _notify(progress, {"type": "text_delta", "delta": content})
-                return content, usage_total
+                return content, verified_links
             raise ModelProviderError("模型没有返回可显示的回答")
 
         # Tool Calling 轮次产生的临时文本不属于最终回答，立即清空预览。
@@ -581,37 +655,47 @@ def _run_tool_loop(
             call_id = str(call.get("id") or uuid4().hex)
             function = call.get("function") or {}
             name = str(function.get("name") or "")
-            # AI输出的arguments有可能是字符串，做兼容解析为字典
-            arguments = _parse_arguments(function.get("arguments"))
+            raw_arguments = function.get("arguments")
+            # 进度事件只展示可安全解析的参数预览；严格校验由 ToolExecutor 统一完成。
+            arguments = _argument_preview(raw_arguments)
             _notify(progress, {
                 "type": "tool_start",
                 "name": name,
                 "arguments": arguments,
                 "message": _TOOL_PROGRESS_LABELS.get(name, f"正在调用 {name}"),
             })
-            try:
-                # 在本地执行工具：查询pcap报文、查询服务、时间线等
-                result = execute_tool(name, arguments, session_id)
-            except Exception as exc:
-                # 工具执行报错，错误信息作为工具返回结果传给大模型，AI可以感知工具失败
-                result = {"error": str(exc)}
+            outcome = executor.execute(name, raw_arguments, cancel_event)
             _check_cancel(cancel_event)
-            tool_ok = "error" not in result
             # 记录本次调用的工具，用于前端展示
             tool_record = {
                 "name": name,
-                "arguments": arguments,
-                "links": collect_navigation_links(name, arguments, result),
+                "arguments": outcome.arguments,
+                "links": outcome.links,
+                "status": outcome.status,
+                "ok": outcome.ok,
+                "error_code": outcome.error_code,
+                "duration_ms": outcome.duration_ms,
+                "result_bytes": outcome.result_bytes,
             }
             used_tools.append(tool_record)
+            verified_links.extend(outcome.verified_links)
+            if outcome.status == "success":
+                completion_label = "完成"
+            elif outcome.status == "partial":
+                completion_label = "部分完成"
+            else:
+                completion_label = "失败"
             _notify(progress, {
                 "type": "tool_end",
                 "name": name,
-                "arguments": arguments,
-                "ok": tool_ok,
+                "arguments": outcome.arguments,
+                "ok": outcome.ok,
+                "status": outcome.status,
+                "error_code": outcome.error_code,
+                "duration_ms": outcome.duration_ms,
                 "message": (
                     f"{_TOOL_PROGRESS_LABELS.get(name, name).removeprefix('正在')}"
-                    f"{'完成' if tool_ok else '失败'}"
+                    f"{completion_label}"
                 ),
             })
             # 将工具执行结果组装tool角色消息，追加到messages，下一轮传给大模型
@@ -619,20 +703,13 @@ def _run_tool_loop(
                 "role": "tool",
                 "tool_call_id": call_id,
                 "name": name,
-                "content": tool_result_json(result),
+                "content": outcome.content,
             })
 
     # 循环耗尽最大次数，抛出异常
-    raise ModelProviderError("工具调用次数超过限制")
-
-
-def _merge_usage(target: dict[str, int], value: Any) -> None:
-    """合并不同模型轮次的 Token usage，忽略非整数扩展字段。"""
-    if not isinstance(value, dict):
-        return
-    for key, item in value.items():
-        if isinstance(item, int) and not isinstance(item, bool):
-            target[key] = target.get(key, 0) + item
+    raise ModelProviderError(
+        f"模型连续 {executor.budget.max_model_rounds} 轮调用 Tool，已停止以避免循环"
+    )
 
 
 def _check_cancel(cancel_event: Event | None) -> None:
@@ -657,41 +734,11 @@ def _notify(
         return
 
 
-def _system_prompt(state: Any, config: Any) -> str:
-    """
-    生成System系统提示词。
-    把当前pcap文件名、报文总数、当前模型、api地址注入prompt，同时约束AI的行为规则。
-    强制AI不能瞎编数据，必须调用工具拿抓包事实，输出要带上报文索引证据。
-    """
-    return f"""你是 SOME/IP 和 SOME/IP‑SD 抓包分析助手。
-当前解析会话包含 {state.total_messages} 条报文，PCAP 文件为 {state.pcap_name}。
-当前实际调用的模型配置是 {config.model}，API 地址是 {config.api_base}。
-
-规则：
-1. 涉及服务、报文、Offer、Subscribe、Ack、Nack、Notification 或订阅异常的事实时，必须调用工具查询。
-2. 工具结果是事实来源，不得虚构抓包中不存在的服务、客户端、数量或状态。
-3. 明确区分事实与推断。信息不足时直接说明限制。
-4. Service ID 同时显示十六进制形式。回答使用用户提问的语言。
-5. 每个主要诊断结论必须至少引用一条工具证据，写明 message_index、frame_index 和 timestamp_iso；不能只写“来自工具”。
-6. 用户询问模型身份时，只能回答上述实际模型名称与 API 配置，不得猜测未提供的版本或供应商信息。
-7. 可用能力包括订阅总览、服务查找、Offer 时间线、订阅时间线、报文检索、单报文详情、Notification 统计和按路径读取 Payload 字段。
-8. Tool 返回的关联规则属于项目诊断规则；不能把关联结果描述成协议线上直接携带的字段。
-9. Offer 冲突必须以相同 Service ID 和 Instance ID 被多个 ECU 发布为准，不能仅因同一 Service ID 存在多个 Instance 而判冲突。
-10. “已订阅但抓包内无 Notification”只是抓包时段内的现象，不等于已证明服务故障；观察到少量 Notification 也不能单独证明频率和业务行为完全健康。
-11. 分析深层 Payload 时优先调用 get_payload_field；只有用户明确要求整条报文结构时才调用 get_message_detail 并返回解析树。
-12. 回答中的可定位对象必须使用以下 Markdown 链接格式，不要只输出纯文本 ID：
-    - 报文证据：`[Message 123 / Frame 456](#someip-message-123)`
-    - 服务：`[Service 0x0A01](#someip-service-0x0A01)`
-    - EventGroup：`[EventGroup 0xA005](#someip-eventgroup-0x0A01-0xA005)`
-    - 信号时序：`[Open signal timing](#someip-signal?service=0x0A01&event=0xA005&start=1.0&end=2.0)`
-    链接参数必须来自 Tool 结果或本次 Tool 参数，不能自行猜测。"""
-
-
-def _parse_arguments(value: Any) -> dict[str, Any]:
+def _argument_preview(value: Any) -> dict[str, Any]:
     """
     兼容解析AI输出的tool调用参数。
     部分LLM返回arguments是json字符串，部分直接返回dict，统一输出字典。
-    解析失败返回空字典，防止程序崩溃。
+    解析失败仅返回空预览，ToolExecutor 仍会把它判定为参数错误。
     """
     if isinstance(value, dict):
         return value
@@ -702,6 +749,22 @@ def _parse_arguments(value: Any) -> dict[str, Any]:
         return parsed if isinstance(parsed, dict) else {}
     except json.JSONDecodeError:
         return {}
+
+
+def _ensure_query_limit_notice(
+    answer: str,
+    used_tools: list[dict[str, Any]],
+) -> tuple[str, bool]:
+    """部分查询失败时补充确定性的限制说明，避免模型掩盖缺失证据。"""
+    incomplete = [item for item in used_tools if item.get("status") != "success"]
+    if not incomplete or re.search(r"(?m)^#{1,6}\s*查询限制\s*$", answer):
+        return answer, False
+    lines = ["### 查询限制"]
+    for item in incomplete:
+        name = str(item.get("name") or "unknown_tool")
+        code = str(item.get("error_code") or "partial_result")
+        lines.append(f"- `{name}` 未完整完成（`{code}`），相关结论仅基于已返回证据。")
+    return answer.rstrip() + "\n\n" + "\n".join(lines), True
 
 
 def _message_content(content: Any) -> str:

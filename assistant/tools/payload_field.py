@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from assistant.tool_support import parse_int, require_queries
+from .support import parse_int, require_queries
 
 TOOL_DEFINITION: dict[str, Any] = {
     "type": "function",

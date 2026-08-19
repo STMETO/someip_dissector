@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from assistant.tool_support import (
+from .support import (
     clamp_limit,
     compact_message,
     parse_float,

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 
-from assistant.token_budget import (
+from assistant.conversation.context_budget import (
     ContextBudgetError,
     build_context_plan,
     estimate_request_tokens,

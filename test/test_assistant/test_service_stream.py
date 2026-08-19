@@ -8,9 +8,9 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from assistant.config import ModelConfig
-from assistant.provider import ModelProviderError
-from assistant.service import cancel_request, chat_stream, clear_all_conversations
+from assistant.llm.config import ModelConfig
+from assistant.llm.gateway import ModelProviderError
+from assistant.application.service import cancel_request, chat_stream, clear_all_conversations
 
 
 class AssistantStreamTests(unittest.TestCase):
@@ -34,10 +34,10 @@ class AssistantStreamTests(unittest.TestCase):
     def tearDown(self):
         clear_all_conversations()
 
-    @patch("assistant.service.execute_tool")
-    @patch("assistant.service.create_chat_completion")
-    @patch("assistant.service.get_model_config")
-    @patch("assistant.service.get_session")
+    @patch("assistant.application.service.execute_tool")
+    @patch("assistant.application.service.create_chat_completion")
+    @patch("assistant.application.service.get_model_config")
+    @patch("assistant.application.service.get_session")
     def test_stream_emits_tool_progress_and_structured_links(
         self,
         mocked_session,
@@ -88,9 +88,9 @@ class AssistantStreamTests(unittest.TestCase):
             for link in result["tools"][0]["links"]
         ))
 
-    @patch("assistant.service.create_chat_completion")
-    @patch("assistant.service.get_model_config")
-    @patch("assistant.service.get_session")
+    @patch("assistant.application.service.create_chat_completion")
+    @patch("assistant.application.service.get_model_config")
+    @patch("assistant.application.service.get_session")
     def test_stream_without_tool_returns_answer_directly(
         self,
         mocked_session,
@@ -110,10 +110,10 @@ class AssistantStreamTests(unittest.TestCase):
         self.assertEqual(events[-1]["result"]["answer"], "直接回答。")
         self.assertEqual(events[-1]["result"]["tools"], [])
 
-    @patch("assistant.service.execute_tool")
-    @patch("assistant.service.create_chat_completion")
-    @patch("assistant.service.get_model_config")
-    @patch("assistant.service.get_session")
+    @patch("assistant.application.service.execute_tool")
+    @patch("assistant.application.service.create_chat_completion")
+    @patch("assistant.application.service.get_model_config")
+    @patch("assistant.application.service.get_session")
     def test_multiple_tool_calls_are_all_reported(
         self,
         mocked_session,
@@ -154,9 +154,9 @@ class AssistantStreamTests(unittest.TestCase):
             2,
         )
 
-    @patch("assistant.service.create_chat_completion")
-    @patch("assistant.service.get_model_config")
-    @patch("assistant.service.get_session")
+    @patch("assistant.application.service.create_chat_completion")
+    @patch("assistant.application.service.get_model_config")
+    @patch("assistant.application.service.get_session")
     def test_provider_failure_becomes_stream_error(
         self,
         mocked_session,
@@ -176,9 +176,9 @@ class AssistantStreamTests(unittest.TestCase):
         self.assertEqual(events[-1]["status_code"], 502)
         self.assertEqual(events[-1]["message"], "上游连接失败")
 
-    @patch("assistant.service.create_chat_completion")
-    @patch("assistant.service.get_model_config")
-    @patch("assistant.service.get_session")
+    @patch("assistant.application.service.create_chat_completion")
+    @patch("assistant.application.service.get_model_config")
+    @patch("assistant.application.service.get_session")
     def test_active_stream_can_be_cancelled(
         self,
         mocked_session,

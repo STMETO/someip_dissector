@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from assistant.tool_support import clamp_limit, require_queries
+from .support import clamp_limit, require_queries
 
 TOOL_DEFINITION: dict[str, Any] = {
     "type": "function",

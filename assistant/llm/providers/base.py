@@ -7,7 +7,7 @@ from threading import Event
 from typing import Any, Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from assistant.config import ModelConfig
+    from assistant.llm.config import ModelConfig
 
 
 TextDeltaCallback = Callable[[str], None]

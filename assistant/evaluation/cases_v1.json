@@ -1,0 +1,60 @@
+{
+  "version": "diagnostic-eval-v1",
+  "description": "SOME/IP-SD 第一版固定语义评测集。事实值由测试夹具注入，模型只能引用允许的 Tool 证据。",
+  "cases": [
+    {
+      "case_id": "offer-conflict",
+      "category": "Offer 冲突",
+      "question": "当前抓包是否存在 Offer 冲突？请给出服务、实例、发布 ECU 和证据。",
+      "expected_tools": ["get_subscription_status", "get_offer_timeline"],
+      "required_facts": ["同一 Service ID", "同一 Instance ID", "多个发布 ECU"],
+      "forbidden_claims": ["只要同一 Service 存在多个 Instance 就属于冲突", "未查询证据时编造 ECU"],
+      "allowed_evidence": ["subscription_status.offer_evidence", "offer_timeline.events.evidence"]
+    },
+    {
+      "case_id": "subscribe-without-offer",
+      "category": "有订阅但无 Offer",
+      "question": "找出抓包中有 Subscribe 但没有观察到 Offer 的服务和 EventGroup。",
+      "expected_tools": ["get_subscription_status", "get_subscription_timeline"],
+      "required_facts": ["抓包时段内未观察到 Offer", "存在 Subscribe 证据"],
+      "forbidden_claims": ["直接断言服务端从未启动", "把抓包外状态写成事实"],
+      "allowed_evidence": ["subscription_status.subscribe_evidence", "subscription_timeline.events.evidence"]
+    },
+    {
+      "case_id": "subscribe-without-ack",
+      "category": "Subscribe 未 Ack",
+      "question": "哪些 EventGroup 已订阅但没有 Ack？请区分未观察到 Ack 和收到 Nack。",
+      "expected_tools": ["get_subscription_status", "get_subscription_timeline"],
+      "required_facts": ["存在 Subscribe", "抓包时段内未观察到 Ack", "未把 Nack 与无 Ack 混为一谈"],
+      "forbidden_claims": ["没有 Ack 就一定是服务端故障", "虚构 Nack"],
+      "allowed_evidence": ["subscription_status.subscribe_evidence", "subscription_timeline.events.evidence"]
+    },
+    {
+      "case_id": "subscription-nack",
+      "category": "Nack",
+      "question": "抓包中是否收到 SubscribeEventGroupNack？列出对应服务、EventGroup 和客户端。",
+      "expected_tools": ["get_subscription_status", "get_subscription_timeline"],
+      "required_facts": ["Nack 报文证据", "Service ID", "EventGroup ID"],
+      "forbidden_claims": ["把超时推断成 Nack", "没有证据时声称收到 Nack"],
+      "allowed_evidence": ["subscription_status.nack_evidence", "subscription_timeline.events.evidence"]
+    },
+    {
+      "case_id": "subscribed-without-notification",
+      "category": "订阅后无通知",
+      "question": "哪些 EventGroup 完成订阅但抓包内没有 Notification？给出边界说明。",
+      "expected_tools": ["get_subscription_status", "get_notification_statistics"],
+      "required_facts": ["存在 Subscribe", "Ack 状态", "抓包时段内 Notification 数量为 0"],
+      "forbidden_claims": ["直接确认服务端发送故障", "断言业务事件一定已触发"],
+      "allowed_evidence": ["subscription_status.subscribe_evidence", "subscription_status.ack_evidence", "notification_statistics"]
+    },
+    {
+      "case_id": "healthy-subscription-chain",
+      "category": "正常链路",
+      "question": "给出一个 Offer、Subscribe、Ack、Notification 均可观察到的正常订阅链路。",
+      "expected_tools": ["get_subscription_status", "get_subscription_timeline"],
+      "required_facts": ["Offer", "Subscribe", "Ack", "至少一条 Notification"],
+      "forbidden_claims": ["仅凭少量 Notification 断言频率完全正常", "省略证据"],
+      "allowed_evidence": ["subscription_status", "subscription_timeline.events.evidence"]
+    }
+  ]
+}
