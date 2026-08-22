@@ -1,115 +1,290 @@
-# AI 分析助手待办事项
+# AI 问答助手 LangChain / LangGraph 重构 TODO
 
-## 第一阶段：完善现有 Tool（已完成）
+## 1. 重构结论
 
-- [x] 将订阅统计字段改为无歧义名称，并明确服务、EventGroup 和报文三种统计单位。
-- [x] 为 Offer、Subscribe、Ack、Nack 和 Notification 返回报文证据。
-- [x] 证据包含消息索引、PCAP 帧序号、时间戳、源/目标 IP 和 SD Entry 索引。
-- [x] 区分抓包事实、项目关联规则和可能原因，避免把推断描述成线上字段。
-- [x] 注入当前实际模型名称和 API 地址，正确回答模型身份。
-- [x] 修复 EventGroup ID 已带 `0x8000` 时 Notification 被重复计数的问题。
-- [x] 将 Offer 冲突判定修正为同一 `(Service ID, Instance ID)` 被多个 ECU 发布，避免合法多实例误报。
-- [x] 将助手目录中原有英文模块说明和关键注释改为中文。
+本次不再维护自研 Agent 工作流，也不设计 Legacy/LangGraph 双运行时。直接将 AI 问答
+主链路迁移到 LangChain 1.x 与 LangGraph，现有 `_run_tool_loop`、自研模型消息循环和
+重复的工作流代码在新链路通过回归测试后删除。
 
-## 第二阶段：补充核心 Tools（已完成）
+第一批重构先完成框架、Tool Calling、ReAct、Reflection 和 Web 主链路切换；上下文工程、
+短期/长期记忆、Checkpoint 深化、可观测性等能力在主框架稳定后继续建设。
 
-- [x] `get_subscription_status`：查询 Offer、Subscribe、Ack、Nack 和 Notification 总览。
-- [x] `find_service`：通过十六进制 ID、十进制 ID 或 ARXML 名称查找服务。
-- [x] `get_offer_timeline`：查询 Offer、StopOffer、TTL、Instance 和发布 ECU。
-- [x] `get_subscription_timeline`：查询 Subscribe、StopSubscribe、Ack、Nack 和关联通知。
-- [x] `search_messages`：按服务、方法、类型、IP、SD Entry、状态和时间检索报文。
-- [x] `get_message_detail`：读取 Header、SD、Payload 和反序列化树，并限制大字段长度。
-- [x] 使用服务端白名单注册全部 Tool，拒绝模型调用未注册函数。
-- [x] 增加 Tool Schema、参数、证据、重复计数和白名单分发单元测试。
+RAG 暂不纳入本轮重构。当前核心数据是 PCAP、SOME/IP-SD、ARXML 和 Payload 的结构化
+结果，使用精确查询 Tool 比向量检索更可靠。以后只有在引入协议规范、诊断手册等
+非结构化知识库时，再单独评估 Retrieval/RAG。
 
-## 第三阶段：统一查询层（已完成）
+## 2. 目标技术架构
 
-- [x] 将页面 API 与 AI Tool 的共用查询逻辑抽取到 `someip/analysis/queries/`。
-- [x] 增加服务、Offer、订阅、消息、信号和证据查询模块，避免重复遍历大型抓包。
-- [x] 为会话建立只读索引，缓存 Service、Method、SD Entry、IP、状态和时间戳映射。
-- [x] 增加 `get_notification_statistics`，支持通知间隔与信号字段数值统计。
-- [x] 增加 `get_payload_field`，按字段路径读取深层 Payload，避免发送整棵解析树。
-- [x] 让消息列表、订阅诊断、信号时序和 AI Tool 复用同一个会话查询对象。
-- [x] 增加索引复用、非单调时间戳、页面同源数据和字段路径查询单元测试。
+| 能力 | 目标实现 |
+|------|----------|
+| Agent 主框架 | LangGraph `StateGraph` |
+| 动态推理与工具选择 | LangChain `create_agent` ReAct 子图 |
+| Reflection | LangGraph evaluator-optimizer 子图 |
+| 模型接入 | `ChatDeepSeek`、`ChatOpenAI` 及兼容 ChatModel |
+| Tool Calling | LangChain `StructuredTool` / `@tool` |
+| 参数与回答约束 | Pydantic Schema + Structured Output |
+| 运行时依赖 | LangChain `Runtime` / `ToolRuntime` |
+| 横切治理 | LangChain Middleware |
+| 状态与条件路由 | LangGraph State、Node、Conditional Edge |
+| 流式输出 | LangGraph Stream Events → 现有 NDJSON |
+| 后续短期记忆 | LangGraph Checkpointer |
+| 后续长期记忆 | LangGraph Store |
+| 后续可观测性 | LangSmith 或 OpenTelemetry |
 
-## 第四阶段：前端证据联动
+目标调用链：
 
-- [x] 点击 AI 回答中的报文证据，跳转消息列表并展开解析树。
-- [x] 点击 Service ID，打开订阅诊断中的对应服务。
-- [x] 点击 EventGroup，展开客户端和 Ack 状态。
-- [x] 点击时间范围，跳转信号时序页面并应用对应缩放范围。
-- [x] 通过 NDJSON 事件流显示“正在查询 Offer 时间线”等 Tool 执行进度。
+```text
+FastAPI chat / stream
+        |
+        v
+LangGraph SOME/IP Diagnostic Graph
+        |
+        +--> bootstrap             校验会话、模型、权限和预算
+        +--> classify              识别意图与 SOME/IP 实体
+        +--> diagnostic_agent      受约束 ReAct：Model <-> Tools
+        +--> collect_evidence      汇总 Tool 证据
+        +--> draft_answer          生成结构化初稿
+        +--> deterministic_guard   确定性证据与链接校验
+        +--> reflect_answer        LLM 评审初稿
+        +--> revise / finish       限次修正或完成
+        |
+        v
+Structured Answer + Markdown + Navigation
+```
 
-## 对话与模型接入
+## 3. 重构边界
 
-- [x] 将基础请求客户端扩展为 `assistant/llm/providers/` 可插拔适配层，支持 DeepSeek 和通用 OpenAI-compatible 接口。
-- [x] 通过 NDJSON 实时输出模型文本、Tool 执行进度、Token 预算和最终结果。
-- [x] 增加模型能力探测，验证 Tool Calling 与流式输出；上下文窗口由配置约束并在请求前校验。
-- [x] 增加可插拔 Token 计数器；安装 `tiktoken` 时使用真实编码器，否则使用保守 Unicode 估算。
-- [x] 为长对话增加有界滚动摘要，并将模型上下文历史与 UI 展示历史分离。
-- [x] 允许持久化解析记录选择是否同时保存 AI 对话，API Key 和 Tool 原始结果不落盘。
-- [x] 增加请求取消和失败问题重试功能。
-- [ ] 为 DeepSeek、百炼和本地模型接入各供应商官方 Tokenizer，替代通用估算。
+必须保留：
 
-## 第五阶段：问答可靠性与执行治理（已完成）
+- `someip/analysis/queries/`：页面和 AI 共用的唯一事实查询层。
+- `assistant/tools/*.py`：现有十四个 SOME/IP 领域查询实现。
+- Tool 白名单、参数限制、结果大小限制、跨会话授权和取消能力。
+- 证据链接、Markdown、流式输出和前端页面联动。
+- DeepSeek、OpenAI-compatible 模型配置能力。
 
-> 目标：先让基础 Tool 的调用过程可限制、可观测、可评测，再继续增加工具数量。
+需要替换：
 
-- [x] 从 `assistant/application/service.py` 抽取独立 Tool 执行器，统一处理参数校验、超时、取消、结果大小和异常转换。
-- [x] 为单次问答增加模型轮数、Tool 调用次数、单 Tool 耗时、累计 Tool 耗时和结果字节数预算。
-- [x] Tool 达到预算或部分失败时返回可用的部分证据，并要求模型明确说明未完成的查询，避免整轮问答直接失败。
-- [x] 为每次问答生成结构化运行记录，包含请求 ID、会话 ID、模型轮次、Tool 名称、耗时、结果大小和 Token 用量。
-- [x] 运行记录禁止保存 API Key、完整 Payload、System Prompt 和未经脱敏的模型请求体。
-- [x] 将系统提示词拆分为版本化模板，分别管理角色约束、事实与推断边界、Tool 使用规则和回答格式。
-- [x] 增加回答契约：结论必须区分“抓包事实”“项目诊断规则”“可能原因”，关键结论必须关联结构化证据。
-- [x] 检查模型生成的报文、Service 和 EventGroup 链接，丢弃无法由本轮 Tool 结果验证的链接。
-- [x] 增加无 Tool 回答、Tool 参数错误、空结果、部分失败、超时、取消和模型循环调用的回归测试。
-- [x] 建立第一版固定评测集，覆盖 Offer 冲突、无 Offer 订阅、无 Ack、Nack、订阅后无通知和正常链路。
-- [x] 为评测集记录期望调用的 Tool、必须出现的事实、禁止出现的推断和允许的证据范围。
+- `assistant/application/service.py::_run_tool_loop`。
+- 自研 assistant/tool 消息拼装和模型循环终止逻辑。
+- 自研 Provider HTTP 请求实现，优先迁移到 LangChain 官方 ChatModel。
+- 分散在 Service 中的 Tool 重试、模型重试和生命周期控制。
+- 最终仅依赖 Prompt 约束的自由文本回答流程。
 
-## 第六阶段：诊断 Tools 扩展（已完成）
+本轮明确不做：
 
-- [x] `get_request_response_trace`：按 Client ID、Session ID、Service 和 Method 关联 Request/Response，统计响应时间、缺失响应和错误码。
-- [x] `get_ecu_service_topology`：汇总 ECU/IP 的服务提供、服务消费、订阅关系和通信方向。
-- [x] `get_arxml_definition`：查询 Service、Method、Event、EventGroup、字段路径和数据类型定义，不向模型发送整份 ARXML。
-- [x] `search_payload_values`：按字段路径、值、范围和时间检索反序列化结果，并返回有限报文证据。
-- [x] `get_anomaly_details`：按异常类型展开受影响服务、EventGroup、客户端、时间范围和代表报文。
-- [x] `compare_sessions`：比较最多四组已解析记录的服务、Offer、订阅、通知数量和异常差异。
-- [x] 为跨会话 Tool 增加显式会话白名单，模型只能访问用户在当前 AI 面板中明确选择的解析记录。
-- [x] 为每个新增 Tool 延续“一文件一工具”，复用 `someip/analysis/queries/`；Payload 字段路径使用有界懒索引。
-- [x] 为新增 Tool 补充 Schema、参数边界、结果上限、可用证据链接和真实 PCAP/ARXML 全链路回归。
+- RAG、向量数据库、Embedding 和文档切分。
+- 多 Agent 协作、Supervisor、GraphRAG 和自动生成 Tool。
+- 让模型直接访问 PCAP 文件、ARXML 文件、Shell 或数据库连接。
+- 在主框架迁移前大规模重写上下文和记忆系统。
 
-## 第七阶段：上下文与知识增强（中期计划）
+## 4. 当前能力基线
 
-- [ ] 将滚动摘要升级为结构化会话摘要，分别保存用户目标、已确认事实、未解决问题和最近使用的 Service/EventGroup。
-- [ ] 对“这个服务”“刚才的 EventGroup”等指代增加显式实体解析，无法唯一确定时要求用户澄清。
-- [ ] 建立 ARXML 名称、字段说明和项目诊断规则的轻量检索层，为模型提供按需上下文而不是完整配置文件。
-- [x] 支持用户选择多组解析记录后进行对比问答，默认仍严格绑定当前会话，避免跨抓包串数据。
-- [ ] 支持把一次诊断问答整理为结构化报告，包含结论、证据、推断、未决项和后续排查建议。
-- [ ] 支持导出 Markdown/JSON 诊断报告，并在导出前允许用户选择是否包含 IP、Payload 和 ARXML 名称。
+- [x] 十四个 SOME/IP/SD/ARXML/Payload 只读 Tools 已完成。
+- [x] 页面和 AI Tool 已复用 `SessionQueries` 统一查询层。
+- [x] 已有 Tool Schema、白名单、参数校验、调用预算和结果截断。
+- [x] 已有 DeepSeek 和 OpenAI-compatible 模型配置。
+- [x] 已有 NDJSON 流式文本、Tool 进度、请求取消和失败重试。
+- [x] 已有 Token 预算、滚动摘要和可选对话持久化。
+- [x] 已有证据校验、导航链接校验和固定诊断评测集。
+- [x] 已有 Tool、Provider、流式、可靠性和查询层测试。
 
-## 第八阶段：模型与部署演进（长期计划）
+这些能力是迁移验收基线，不代表其内部实现必须保留。
 
-- [ ] 增加 OpenAI、阿里云百炼和本地模型的独立 Provider，厂商适配器统一继承 `BaseProvider` 并组合协议客户端。
-- [ ] 按模型能力选择 Tool Calling、结构化输出和流式策略，不假设所有 OpenAI-compatible 服务行为完全一致。
-- [ ] 支持本地模型离线部署，明确最低上下文窗口、Tool Calling 能力和硬件要求。
-- [ ] 评估按任务选择模型：简单查询使用低成本模型，复杂诊断和报告使用高能力模型。
-- [ ] 评估 MCP 接入，仅暴露经过权限控制的只读查询能力，不允许模型访问任意文件和命令。
-- [ ] 建立模型版本升级回归流程，同一评测集对比事实准确率、Tool 选择率、证据覆盖率、延迟和 Token 成本。
+## 5. 第一阶段：直接引入框架和模型适配
 
-## 安全与运行管理
+目标：项目开始直接依赖 LangChain/LangGraph，并建立新的 Agent 目录。
 
-- [ ] 为远程部署增加用户认证和独立的密钥隔离。
-- [ ] 增加请求频率和请求体大小限制。
-- [ ] 非本地部署时增加模型服务地址白名单，防止任意外部请求。
-- [ ] 根据用户设置对 IP、Payload 和 ARXML 敏感数据进行脱敏。
-- [ ] 增加结构化审计日志，禁止记录 API Key 和原始敏感 Payload。
-- [ ] 为多用户部署增加项目空间、会话隔离、配额和审计策略。
+- [x] 新增并锁定后端依赖：`langchain`、`langchain-core`、`langgraph`、
+  `langchain-deepseek`、`langchain-openai`。
+- [x] 建立统一依赖文件和版本锁定机制，记录 Python 版本兼容范围。
+- [x] 新增 `assistant/agent/`：`state.py`、`context.py`、`graph.py`、`routing.py`、`nodes/`。
+- [x] 新增 `assistant/integrations/langchain/`：`models.py`、`tools.py`、`events.py`。
+- [x] 使用 `ChatDeepSeek` 接入 `deepseek-chat`，明确 `deepseek-reasoner` 不进入 Tool Calling 主链路。
+- [x] 使用 `ChatOpenAI` 接入 OpenAI 和标准 OpenAI-compatible Chat Completions 服务。
+- [x] 建立 `ModelFactory`，根据 Provider 返回标准 `BaseChatModel`，不向上层暴露厂商协议。
+- [x] 通过离线标准协议测试验证流式、Structured Output 和模拟 Tool Calling。
+- [x] 将 API Key、base URL、模型名、超时、重试和 Token 上限统一映射到 ChatModel 配置。
+- [x] 增加模型适配单元测试，不再使用真实 HTTP 请求作为普通测试前提。
 
-## 测试与质量
+验收：标准 ChatModel 能完成流式问答、结构化输出和一次模拟 Tool Calling。
 
-- [x] 使用固定链路测试十四个 Tool 的核心行为。
-- [x] 使用真实 `test1.pcap` 校验订阅统计和时间线结果。
-- [x] 使用模拟模型覆盖零次、一次、多次 Tool 调用、流式分片、上游失败和主动取消。
-- [ ] 验证 DeepSeek、OpenAI、阿里云百炼和本地兼容接口。
-- [ ] 测试前端空状态、加载状态、错误状态和解析会话切换。
+## 6. 第二阶段：将现有 Tools 迁移为 LangChain Tools
+
+目标：Tool 先框架化，领域查询逻辑保持不变。
+
+- [ ] 为十四个 Tool 分别定义 Pydantic `args_schema`。
+- [ ] 使用 `StructuredTool` 或统一 Tool Factory 包装现有 `execute_tool`。
+- [ ] Tool 描述统一说明用途、调用条件、ID 格式、返回范围、证据类型和限制。
+- [ ] 使用 `ToolRuntime` 注入 `session_id`、授权对比会话、取消信号和执行预算。
+- [ ] 模型可见参数中禁止出现查询对象、文件路径、API Key 和服务端内部状态。
+- [ ] 将现有 `ToolExecutor` 能力迁移为 `wrap_tool_call` Middleware。
+- [ ] Middleware 继续执行白名单、Pydantic 校验、超时、取消、总预算和结果大小治理。
+- [ ] Tool 返回统一结构：`summary`、`data`、`evidence`、`warnings`、`truncated`、`error`。
+- [ ] 使用 Tool artifact 保存前端需要的完整证据；模型只接收有限摘要。
+- [ ] 为大结果加入分页、字段选择和明确截断信息。
+- [ ] 增加 LangChain Tool 与原 Tool 的契约对比测试。
+
+验收：十四个 Tool 都能被 LangChain 调用，返回事实与现有实现完全一致。
+
+## 7. 第三阶段：建立 LangGraph + ReAct 主图
+
+目标：用 LangGraph 完全接管当前自研 Tool Calling 循环。
+
+- [ ] 定义 `SomeIpAgentState`，至少包含 messages、intent、entities、tool_trace、
+  evidence、draft_answer、reflection、final_answer、status、budget 和 error。
+- [ ] 定义 `SomeIpAgentContext`，注入当前会话、允许访问的会话、模型配置和取消信号。
+- [ ] 实现 `bootstrap` 节点：校验解析会话、问题、模型能力、权限和执行预算。
+- [ ] 实现 `classify` 节点：使用 Structured Output 识别意图、Service/Method/EventGroup、
+  IP、字段路径、时间范围以及是否需要 Tool。
+- [ ] 根据意图动态选择 Tool 子集，避免每轮向模型暴露全部 Tool Schema。
+- [ ] 使用 LangChain `create_agent` 构建 ReAct 子图，负责模型决策、Tool Calling 和 ToolMessage。
+- [ ] 将 ReAct Agent 嵌入外层 `StateGraph`，外层负责确定性前后处理。
+- [ ] 使用条件边处理 direct_answer、use_tools、clarify、partial_failure、cancelled 和 failed。
+- [ ] 对重复 Tool、空结果、错误参数和部分失败建立明确路由。
+- [ ] 设置最大模型轮次、最大 Tool 次数、Tool 总耗时、结果字节和 Token 硬限制。
+- [ ] 将 Tool 证据从消息中抽取为独立 State 字段，避免只能从自然语言恢复证据。
+- [ ] 为每个 Node、Edge 和完整 Graph 增加测试。
+
+验收：新 Graph 能完成无 Tool、单 Tool、多 Tool、参数修复、部分失败和取消场景。
+
+## 8. 第四阶段：加入 Reflection 子图
+
+目标：在最终回答输出前，对事实覆盖、证据和推断边界进行自动评审和有限修正。
+
+Reflection 采用 evaluator-optimizer 模式，不保存或展示模型隐藏思维过程，只保存结构化
+评审结果和修正建议。
+
+- [ ] 定义 `ReflectionResult` Schema：passed、score、missing_facts、unsupported_claims、
+  evidence_gaps、format_issues、revision_instructions、needs_more_tools。
+- [ ] 先执行确定性 Guard：Schema、证据 ID、报文索引、Service/EventGroup 和导航链接校验。
+- [ ] 只有复杂诊断、跨会话对比、异常归因和报告类回答进入 LLM Reflection。
+- [ ] 模型身份、配置查询、简单字段读取等低风险回答跳过 Reflection。
+- [ ] Reflection 必须根据用户问题、结构化初稿和本轮证据评审，不能引入新事实。
+- [ ] 若只是表达或结构问题，进入 `revise_answer` 节点修正回答。
+- [ ] 若缺少必要事实且仍有预算，只允许返回 `diagnostic_agent` 补充一次 Tool 查询。
+- [ ] 默认最多一次 Reflection 修正，硬上限两次，达到上限后输出带警告的部分结果。
+- [ ] 防止评审器和生成器互相无限否定；相同反馈不得重复进入修正循环。
+- [ ] 记录 Reflection 次数、评分、失败原因和新增 Tool 次数，不记录隐藏推理文本。
+- [ ] 增加 Reflection 通过、修正、补充 Tool、预算耗尽和循环保护测试。
+
+验收：固定评测集中，证据覆盖率和无依据结论率优于当前实现，延迟和 Token 增量可量化。
+
+## 9. 第五阶段：接管 Web 主链路并删除旧工作流
+
+目标：新 Graph 成为唯一生产调用链，不保留运行时切换开关。
+
+- [ ] 将 `chat` 和 `chat_stream` 改为调用编译后的 LangGraph。
+- [ ] 使用 LangGraph Stream Events 适配现有 NDJSON：context、tool_start、tool_end、
+  text_delta、text_reset、completed、cancelled、error。
+- [ ] 保持现有 FastAPI 路由、请求参数和前端返回字段兼容。
+- [ ] 将 LangGraph run_id、node、sequence 和状态加入脱敏运行记录。
+- [ ] 将现有请求取消信号接入 Graph、模型和 Tool 节点。
+- [ ] 使用完整固定评测集和真实 PCAP/ARXML 执行回归。
+- [ ] 删除 `_run_tool_loop` 及只为旧循环服务的消息拼装代码。
+- [ ] 删除自研 Provider HTTP 调用和已被 ChatModel 替代的重复代码。
+- [ ] 清理失效测试，保留并迁移所有行为测试。
+- [ ] 更新 README 的目录树、调用链、配置和 Agent Graph 图。
+
+验收：Web AI 助手只运行 LangGraph，现有对话、Tool 进度、取消和证据跳转功能不回退。
+
+## 10. 第六阶段：上下文工程优化
+
+目标：在主框架稳定后，优化每轮模型真正看到的上下文。
+
+- [ ] 区分 Runtime Context、Graph State、Model Context 和 Tool Context。
+- [ ] 使用 Middleware 动态构建 System Prompt、消息、Tool 子集和回答格式。
+- [ ] 只向模型注入当前问题需要的会话摘要、领域实体和证据。
+- [ ] 使用 Token 计数进行消息裁剪，优先保留系统规则、当前问题和关键证据。
+- [ ] 使用 Summarization Middleware 替换当前简单滚动摘要。
+- [ ] 结构化摘要保存用户目标、已确认事实、推断、未决项、最近实体和证据引用。
+- [ ] 实现 Service、Method/Event、EventGroup、ECU、字段路径和时间范围的实体状态。
+- [ ] 实现“这个服务”“刚才的事件”等指代消解，无法确定时进入 clarify 节点。
+- [ ] 对 Tool 结果实施摘要、分页和生命周期清理，避免上下文持续膨胀。
+- [ ] 增加长对话、多主题切换和上下文污染评测。
+
+验收：长对话不超上下文窗口、不丢关键实体，平均输入 Token 和延迟低于迁移初版。
+
+## 11. 第七阶段：Checkpoint 与记忆
+
+目标：用 LangGraph 原生状态持久化逐步替代现有对话存储。
+
+- [ ] 使用 `thread_id = session_id:conversation_id` 隔离对话线程。
+- [ ] 单机环境接入 SQLite Checkpointer，支持节点级状态保存和恢复。
+- [ ] 将现有可选“保存对话”映射为 Checkpoint 持久化策略。
+- [ ] 支持页面关闭释放临时线程，持久记录按用户选择保留。
+- [ ] 支持失败恢复、请求取消终态和 Checkpoint 删除。
+- [ ] 从 `assistant/conversation/store.py` 迁移历史记录，并提供一次性兼容读取。
+- [ ] 使用 LangGraph Store 设计长期记忆命名空间，但默认不开启自动写入。
+- [ ] 长期记忆只允许保存用户明确授权的项目术语、偏好和已确认结论。
+- [ ] 禁止长期保存 API Key、完整 Payload、完整 Tool 结果和未经确认的模型推断。
+- [ ] 为未来多用户部署预留 PostgreSQL Checkpointer/Store。
+
+验收：临时和持久对话生命周期符合当前产品规则，服务重启后可恢复指定线程且不串会话。
+
+## 12. 第八阶段：可靠性、安全与可观测性
+
+- [ ] 使用 Model/Tool Middleware 实现超时、指数退避、重试、熔断和错误归一化。
+- [ ] PCAP、ARXML 和 Tool 内容全部视为不可信数据，增加 Prompt Injection Guard。
+- [ ] 继续执行会话白名单、Tool 白名单、参数 Schema 和结果大小限制。
+- [ ] API Key、完整 Prompt、原始 Payload 和 Tool 原始结果禁止进入普通日志。
+- [ ] 接入 LangSmith 或 OpenTelemetry，默认仅记录脱敏 Trace 和指标。
+- [ ] 记录 Graph Node、模型轮次、Tool、Reflection、Token、耗时、重试和最终状态。
+- [ ] 当前只读 Tool 不增加 Human-in-the-loop；未来出现写操作时使用 `interrupt` 审批。
+- [ ] 增加并发、超时、取消、恢复、越权、提示词注入和敏感信息测试。
+
+验收：每次 Graph Run 可追踪，异常可解释，未授权调用为零，敏感正文不外泄。
+
+## 13. 第九阶段：评测与质量门禁
+
+- [ ] 扩展现有 Golden Cases，覆盖 Offer 冲突、无 Offer、无 Ack、Nack、无通知、
+  Request/Response、深层 Payload、ARXML 和跨会话对比。
+- [ ] 评测 Tool 选择率、参数正确率、事实准确率、证据覆盖率和无依据结论率。
+- [ ] 评测 Reflection 修正成功率、误判率、额外延迟和 Token 成本。
+- [ ] 评测 Agent 轨迹：重复 Tool、无效 Tool、越权 Tool、过早结束和循环次数。
+- [ ] 对 DeepSeek 与 OpenAI-compatible 模型执行相同回归集。
+- [ ] 将 Prompt、Graph、Tool Schema、Reflection Schema、模型和评测集版本化。
+- [ ] 建立合并门禁：核心事实不能回退、导航链接必须有效、未授权调用必须为零。
+
+验收：框架、Prompt、Tool 或模型变更都能输出可比较的质量报告。
+
+## 14. RAG 决策
+
+当前结论：不实施 RAG。
+
+- PCAP、SD、ARXML 和 Payload 都可以通过精确索引和领域 Tool 查询。
+- Service ID、Method ID、EventGroup、字段路径和报文索引不适合使用向量相似度查询。
+- 当前问题的重点是 Agent 编排、Tool 可靠性和证据闭环，而不是缺少外部知识召回。
+
+以后满足以下条件时再新增独立 RAG TODO：
+
+- 需要查询 SOME/IP 规范、企业诊断手册、故障案例或自然语言字段说明。
+- 文档数量已经无法通过静态 Prompt 或普通关键词查询管理。
+- 已建立文档版权、版本、权限、引用和更新机制。
+- 离线评测证明 RAG 对回答准确率有明确提升。
+
+## 15. 实施顺序
+
+第一批直接重构：
+
+1. 第一阶段：框架与 ChatModel。
+2. 第二阶段：LangChain Tools。
+3. 第三阶段：LangGraph + ReAct。
+4. 第四阶段：Reflection。
+5. 第五阶段：接管 Web 并删除旧循环。
+
+主框架完成后继续：
+
+6. 第六阶段：上下文工程。
+7. 第七阶段：Checkpoint 与记忆。
+8. 第八阶段：安全与可观测性。
+9. 第九阶段：持续评测和质量门禁。
+
+## 16. 禁止事项
+
+- [ ] 不保留 Legacy/LangGraph 运行时切换，迁移完成后旧循环必须删除。
+- [ ] 不把 SOME/IP 查询实现复制到 Graph Node、Prompt 或 Tool Adapter。
+- [ ] 不让模型直接访问文件系统、Shell、数据库连接、API Key 或未授权会话。
+- [ ] 不把完整 PCAP、ARXML 或反序列化 JSON 放入 Graph State 或模型上下文。
+- [ ] Reflection 不输出、不持久化模型隐藏思维过程，只保留结构化评审结果。
+- [ ] Reflection 必须有限次、可中止并受 Token/时间预算控制。
+- [ ] 当前不引入 RAG、多 Agent、Supervisor、GraphRAG 和自动长期记忆。

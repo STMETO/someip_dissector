@@ -11,11 +11,11 @@
 ### 1. Python 依赖
 
 ```bash
-pip install scapy lxml typing_extensions
-pip install fastapi uvicorn python-multipart aiofiles
-# 可选：AI 上下文使用更准确的 OpenAI 系列 Token 计数
-pip install tiktoken
+python -m pip install -r requirements.txt
 ```
+
+`requirements.txt` 固定了 Python 3.10 环境验证过的解析、Web 与 Agent 依赖版本，
+避免 LangChain/LangGraph 独立升级后出现协议不兼容。
 
 | 依赖 | 用途 |
 |------|------|
@@ -25,6 +25,11 @@ pip install tiktoken
 | `python-multipart` | 文件上传表单解析 |
 | `aiofiles` | 异步文件 I/O |
 | `typing_extensions` | Python < 3.11 的 `NotRequired` 兼容 |
+| `langchain` / `langchain-core` | Agent、ChatModel、Tool 与 Middleware 标准接口 |
+| `langgraph` | 有状态 Agent 工作流、条件边与后续 Checkpoint 支持 |
+| `langchain-deepseek` | DeepSeek 官方 ChatModel 集成 |
+| `langchain-openai` | OpenAI 与标准 OpenAI-compatible ChatModel 集成 |
+| `tiktoken` | 模型上下文 Token 计数 |
 
 ### 2. 前端环境（Node.js + npm）
 

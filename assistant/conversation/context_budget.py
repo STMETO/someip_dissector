@@ -71,8 +71,16 @@ def build_context_plan(
     next_summary = _extend_summary(summary, dropped_turns)
     messages = _compose_messages(system_prompt, next_summary, kept_turns, question)
     # 摘要也可能增长到超过预算，从较旧一侧裁剪并保留提示标签。
+    # 如果最近历史已经占满窗口，摘要可能被压缩为空；此时把最旧的一轮已保留
+    # 对话移入摘要，为有意义的摘要腾出空间。tiktoken 与保守估算器都必须满足
+    # “发生历史裁剪就保留摘要”这一行为契约。
     while next_summary and _count_messages(messages, count) > input_limit:
-        next_summary = _trim_summary(next_summary)
+        trimmed_summary = _trim_summary(next_summary)
+        if not trimmed_summary and kept_turns:
+            dropped_turns.append(kept_turns.pop(0))
+            next_summary = _extend_summary(summary, dropped_turns)
+        else:
+            next_summary = trimmed_summary
         messages = _compose_messages(system_prompt, next_summary, kept_turns, question)
     if _count_messages(messages, count) > input_limit:
         raise ContextBudgetError("最近对话轮次超过模型上下文预算，请缩短当前问题")
