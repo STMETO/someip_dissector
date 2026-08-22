@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from threading import Event
 from typing import Any
 
+from ..execution.tool_executor import ToolExecutor
+
 
 @dataclass(frozen=True)
 class SomeIpAgentContext:
@@ -18,6 +20,7 @@ class SomeIpAgentContext:
     allowed_session_ids: frozenset[str] = frozenset()
     session_queries: Any = None
     cancel_event: Event | None = None
+    tool_executor: ToolExecutor | None = None
 
 
 __all__ = ["SomeIpAgentContext"]

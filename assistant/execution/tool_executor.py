@@ -10,7 +10,7 @@ import json
 import logging
 import os
 from queue import Empty, Queue
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 from time import monotonic
 from typing import Any, Callable
 
@@ -115,6 +115,9 @@ class ToolExecutor:
         self._logger = logger or logging.getLogger(__name__)
         self._tool_elapsed_seconds = 0.0
         self._result_bytes = 0
+        # LangChain ToolNode 可能并发执行同一轮的多个 Tool。请求级锁保证调用序号、
+        # 累计耗时和结果字节预算的检查与更新是原子的。
+        self._execution_lock = Lock()
         # 将本次实际生效的预算写入脱敏运行记录，便于定位被限制的原因。
         self.run_record.execution_budget = {
             "max_model_rounds": self.budget.max_model_rounds,
@@ -134,6 +137,21 @@ class ToolExecutor:
         name: str,
         raw_arguments: Any,
         cancel_event: Event | None = None,
+    ) -> ToolExecutionOutcome:
+        """串行进入请求级执行区，并在等待锁时继续响应用户取消。"""
+        while not self._execution_lock.acquire(timeout=0.05):
+            if cancel_event is not None and cancel_event.is_set():
+                raise ToolExecutionCancelled("请求已取消")
+        try:
+            return self._execute_locked(name, raw_arguments, cancel_event)
+        finally:
+            self._execution_lock.release()
+
+    def _execute_locked(
+        self,
+        name: str,
+        raw_arguments: Any,
+        cancel_event: Event | None,
     ) -> ToolExecutionOutcome:
         """执行一次 Tool；除主动取消外，所有失败都转换为模型可读结果。"""
         sequence = len(self.run_record.tool_calls) + 1
@@ -495,6 +513,7 @@ def _read_float(name: str, default: float, minimum: float, maximum: float) -> fl
 
 
 __all__ = [
+    "ToolHandler",
     "ToolExecutionBudget",
     "ToolExecutionCancelled",
     "ToolExecutionOutcome",

@@ -6,10 +6,26 @@ from .models import (
     create_chat_model,
     resolve_chat_model_provider,
 )
+from .middleware import someip_tool_middleware
+from .tools import (
+    LANGCHAIN_TOOL_MAP,
+    LANGCHAIN_TOOLS,
+    ToolRuntimeConfigurationError,
+    build_langchain_tools,
+    create_tool_context,
+    get_langchain_tool,
+)
 
 __all__ = [
     "ModelCapabilityError",
     "ModelFactoryError",
+    "LANGCHAIN_TOOL_MAP",
+    "LANGCHAIN_TOOLS",
+    "ToolRuntimeConfigurationError",
+    "build_langchain_tools",
     "create_chat_model",
+    "create_tool_context",
+    "get_langchain_tool",
     "resolve_chat_model_provider",
+    "someip_tool_middleware",
 ]

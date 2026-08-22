@@ -100,6 +100,8 @@ someip_dissector/
 │
 ├── assistant/                          # AI 问答编排层（不依赖具体 Web 页面）
 │   ├── __init__.py                     # 唯一公共入口，屏蔽内部目录变化
+│   ├── agent/                          # LangGraph State、Runtime Context 与图节点
+│   ├── integrations/langchain/         # ChatModel、StructuredTool 和 Middleware 适配
 │   ├── application/                    # 对话、流式事件与模型循环编排
 │   ├── contracts/                      # FastAPI 请求参数契约
 │   ├── llm/                            # 模型配置、调用门面和供应商适配器
@@ -169,7 +171,7 @@ someip_dissector/
 `signal_utils.py` → `sd_diagnostic.py` → `queries/__init__.py` → 各领域 Query
 
 ### assistant
-`application/service.py` → `llm/gateway.py` → `execution/tool_executor.py` → `tools/registry.py` → 各 Tool 文件
+`agent/` → `integrations/langchain/` → `execution/tool_executor.py` → `tools/registry.py` → 各 Tool 文件
 
 ### web
 `handlers/analysis.py` → `app.py` → 前端 `App.vue` → 各组件
@@ -289,6 +291,20 @@ Token 用量，不记录 API Key、用户问题、模型答案、System Prompt �
 ```text
 assistant/
 ├── __init__.py
+├── agent/
+│   ├── context.py
+│   ├── state.py
+│   ├── routing.py
+│   ├── graph.py
+│   └── nodes/
+├── integrations/
+│   └── langchain/
+│       ├── models.py
+│       ├── tools.py
+│       ├── tool_schemas.py
+│       ├── tool_results.py
+│       ├── middleware.py
+│       └── events.py
 ├── application/
 │   └── service.py
 ├── contracts/
@@ -339,6 +355,8 @@ assistant/
 | 文件或目录 | 职责 |
 |------------|------|
 | `assistant/__init__.py` | 稳定的包入口，供 FastAPI 导入助手服务，不暴露内部实现细节 |
+| `assistant/agent/` | 定义 LangGraph State、条件路由和不进入模型消息的请求级 Runtime Context |
+| `assistant/integrations/langchain/` | 适配标准 ChatModel 和十四个 StructuredTool，执行参数校验、结果分层及 Tool Middleware |
 | `assistant/application/` | 绑定解析会话和对话历史，编排模型循环、流式事件、取消及答案后处理 |
 | `assistant/contracts/` | 定义配置、聊天和持久化请求的 Pydantic 边界模型 |
 | `assistant/llm/` | 管理模型配置、统一调用门面、能力探测和供应商适配器 |

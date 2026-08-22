@@ -112,17 +112,18 @@ Structured Answer + Markdown + Navigation
 
 目标：Tool 先框架化，领域查询逻辑保持不变。
 
-- [ ] 为十四个 Tool 分别定义 Pydantic `args_schema`。
-- [ ] 使用 `StructuredTool` 或统一 Tool Factory 包装现有 `execute_tool`。
-- [ ] Tool 描述统一说明用途、调用条件、ID 格式、返回范围、证据类型和限制。
-- [ ] 使用 `ToolRuntime` 注入 `session_id`、授权对比会话、取消信号和执行预算。
-- [ ] 模型可见参数中禁止出现查询对象、文件路径、API Key 和服务端内部状态。
-- [ ] 将现有 `ToolExecutor` 能力迁移为 `wrap_tool_call` Middleware。
-- [ ] Middleware 继续执行白名单、Pydantic 校验、超时、取消、总预算和结果大小治理。
-- [ ] Tool 返回统一结构：`summary`、`data`、`evidence`、`warnings`、`truncated`、`error`。
-- [ ] 使用 Tool artifact 保存前端需要的完整证据；模型只接收有限摘要。
-- [ ] 为大结果加入分页、字段选择和明确截断信息。
-- [ ] 增加 LangChain Tool 与原 Tool 的契约对比测试。
+- [x] 为十四个 Tool 分别定义 Pydantic `args_schema`。
+- [x] 使用 `StructuredTool` 或统一 Tool Factory 包装现有 `execute_tool`。
+- [x] Tool 描述统一说明用途、调用条件、ID 格式、返回范围、证据类型和限制。
+- [x] 使用 `ToolRuntime` 注入 `session_id`、授权对比会话、取消信号和执行预算。
+- [x] 模型可见参数中禁止出现查询对象、文件路径、API Key 和服务端内部状态。
+- [x] 将现有 `ToolExecutor` 治理能力接入 `wrap_tool_call` Middleware；请求级执行器继续
+  负责原子化累计预算和超时控制，避免在适配层复制执行逻辑。
+- [x] Middleware 继续执行白名单、Pydantic 校验、超时、取消、总预算和结果大小治理。
+- [x] Tool 返回统一结构：`summary`、`data`、`evidence`、`warnings`、`truncated`、`error`。
+- [x] 使用 Tool artifact 保存前端需要的完整证据；模型只接收有限摘要。
+- [x] 为大结果加入分页、字段选择和明确截断信息。
+- [x] 增加 LangChain Tool 与原 Tool 的契约对比测试。
 
 验收：十四个 Tool 都能被 LangChain 调用，返回事实与现有实现完全一致。
 

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from threading import Event
+from threading import Event, Lock, Thread
 import time
 import unittest
 from unittest.mock import Mock
@@ -114,6 +114,43 @@ class ToolExecutorTests(unittest.TestCase):
 
         self.assertEqual(outcome.error_code, "invalid_tool_result")
         self.assertNotIn("object at", outcome.content)
+
+    def test_parallel_framework_calls_are_serialized_for_budget_accounting(self):
+        active = 0
+        max_active = 0
+        state_lock = Lock()
+
+        def measured_handler(_name, _arguments, _session_id):
+            nonlocal active, max_active
+            with state_lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.02)
+            with state_lock:
+                active -= 1
+            return {"messages": []}
+
+        executor = self._executor(measured_handler)
+        outcomes = []
+        workers = [
+            Thread(
+                target=lambda: outcomes.append(
+                    executor.execute("search_messages", {})
+                )
+            )
+            for _ in range(4)
+        ]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+
+        self.assertEqual(max_active, 1)
+        self.assertEqual(len(outcomes), 4)
+        self.assertEqual(
+            [record.sequence for record in executor.run_record.tool_calls],
+            [1, 2, 3, 4],
+        )
 
     @staticmethod
     def _executor(handler, budget=None):
