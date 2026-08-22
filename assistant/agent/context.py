@@ -19,6 +19,7 @@ class SomeIpAgentContext:
     session_id: str
     allowed_session_ids: frozenset[str] = frozenset()
     session_queries: Any = None
+    model_config: Any = None
     cancel_event: Event | None = None
     tool_executor: ToolExecutor | None = None
 

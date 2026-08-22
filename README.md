@@ -293,10 +293,16 @@ assistant/
 ├── __init__.py
 ├── agent/
 │   ├── context.py
+│   ├── intent.py
 │   ├── state.py
 │   ├── routing.py
 │   ├── graph.py
 │   └── nodes/
+│       ├── bootstrap.py
+│       ├── classification.py
+│       ├── react.py
+│       ├── evidence.py
+│       └── answers.py
 ├── integrations/
 │   └── langchain/
 │       ├── models.py
@@ -322,6 +328,7 @@ assistant/
 │   ├── context_budget.py
 │   └── store.py
 ├── execution/
+│   ├── model_budget.py
 │   ├── tool_executor.py
 │   └── run_record.py
 ├── answering/
@@ -371,6 +378,24 @@ assistant/
 依赖方向固定为 `Web → assistant 公共入口 → application`。`application` 可以组合
 其他子包，但 `llm`、`conversation`、`execution`、`answering`、`tools` 和
 `evaluation` 不反向导入 `application`，避免模型协议、查询能力与 Web 编排重新耦合。
+
+第三阶段已经提供独立可调用的 LangGraph 主图：
+
+```text
+bootstrap -> classify
+  ├─ direct_answer -> finish
+  ├─ clarify -> finish
+  └─ diagnostic_agent (受限 ReAct + 动态 Tool 子集)
+       -> collect_evidence
+       -> draft_answer
+       -> finish
+
+任一节点均可路由到 cancelled 或 failed。
+```
+
+该 Graph 已覆盖模型轮次、Tool 次数、耗时、结果字节、Token 窗口、重复调用和取消
+限制。当前 Web 生产接口仍使用旧调用链；第五阶段完成 NDJSON 流式事件适配后再切换，
+届时删除 `_run_tool_loop`。
 
 调用链如下：
 

@@ -92,6 +92,7 @@ class LangChainToolTests(unittest.TestCase):
             "cancel_event",
             "current_session_id",
             "file_path",
+            "model_config",
             "queries",
             "session_queries",
             "tool_executor",

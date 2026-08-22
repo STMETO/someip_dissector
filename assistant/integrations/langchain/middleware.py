@@ -1,15 +1,54 @@
 """SOME/IP LangChain Tool 的横切治理中间件。"""
 from __future__ import annotations
 
+import json
 from typing import Any, Callable
 
-from langchain.agents.middleware import wrap_tool_call
-from langchain_core.messages import ToolMessage
+from langchain.agents.middleware import wrap_model_call, wrap_tool_call
+from langchain_core.messages import AIMessage, ToolMessage
 from pydantic import ValidationError
 
 from ...execution.tool_executor import ToolExecutionCancelled
+from ...execution.model_budget import enforce_model_context_budget, reserve_model_round
 from .tool_results import build_tool_error_response
 from .tool_schemas import TOOL_ARGS_SCHEMAS
+
+
+@wrap_model_call
+def someip_model_budget_middleware(request: Any, handler: Callable[[Any], Any]) -> Any:
+    """把内层 ReAct 的每次真实模型请求计入全局问答预算。"""
+    runtime = getattr(request, "runtime", None)
+    context = getattr(runtime, "context", None)
+    messages = list(request.messages)
+    if request.system_message is not None:
+        messages.insert(0, request.system_message)
+    enforce_model_context_budget(context, messages, list(request.tools))
+    reserve_model_round(context)
+    return handler(request)
+
+
+@wrap_tool_call
+def repeated_tool_call_middleware(request: Any, handler: Callable[[Any], Any]) -> Any:
+    """阻止模型第三次提交完全相同的 Tool 与参数组合。"""
+    call = request.tool_call
+    fingerprint = _tool_fingerprint(call.get("name"), call.get("args"))
+    repeated = 0
+    state = request.state if isinstance(request.state, dict) else {}
+    for message in state.get("messages", []):
+        if not isinstance(message, AIMessage):
+            continue
+        for previous in message.tool_calls:
+            if _tool_fingerprint(previous.get("name"), previous.get("args")) == fingerprint:
+                repeated += 1
+    # 当前 AIMessage 已经存在于 Agent State，因此第三次调用时计数为 3。
+    if repeated > 2:
+        return _error_message(
+            str(call.get("name") or "unknown"),
+            str(call.get("id") or "unknown"),
+            "duplicate_tool_call",
+            "相同 Tool 和参数已连续重复，调用被停止；请调整查询条件或基于现有证据回答",
+        )
+    return handler(request)
 
 
 @wrap_tool_call
@@ -111,4 +150,17 @@ def _validation_message(exc: ValidationError) -> str:
     return "; ".join(errors)[:2000] or "Tool 参数校验失败"
 
 
-__all__ = ["someip_tool_middleware"]
+def _tool_fingerprint(name: Any, arguments: Any) -> str:
+    """用稳定 JSON 生成重复调用指纹，不依赖字典字段顺序。"""
+    try:
+        payload = json.dumps(arguments or {}, ensure_ascii=False, sort_keys=True)
+    except (TypeError, ValueError):
+        payload = "<invalid>"
+    return f"{str(name or '')}:{payload}"
+
+
+__all__ = [
+    "repeated_tool_call_middleware",
+    "someip_model_budget_middleware",
+    "someip_tool_middleware",
+]

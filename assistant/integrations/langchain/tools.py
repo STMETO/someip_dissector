@@ -96,6 +96,7 @@ def create_tool_context(
     *,
     allowed_session_ids: Iterable[str] = (),
     session_queries: Any = None,
+    model_config: Any = None,
     cancel_event: Event | None = None,
     budget: ToolExecutionBudget | None = None,
     tool_handler: ToolHandler | None = None,
@@ -105,7 +106,11 @@ def create_tool_context(
     跨会话白名单在闭包中绑定到服务端执行函数。模型只能提交目标会话 ID，无法修改
     ``allowed_session_ids`` 本身。
     """
-    allowed = frozenset(str(value) for value in allowed_session_ids if str(value))
+    allowed = frozenset(
+        normalized
+        for value in allowed_session_ids
+        if (normalized := str(value or "").strip())
+    )
     if tool_handler is None:
         def authorized_handler(
             name: str,
@@ -129,6 +134,7 @@ def create_tool_context(
         session_id=session_id,
         allowed_session_ids=allowed,
         session_queries=session_queries,
+        model_config=model_config,
         cancel_event=cancel_event,
         tool_executor=executor,
     )

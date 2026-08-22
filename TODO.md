@@ -131,20 +131,20 @@ Structured Answer + Markdown + Navigation
 
 目标：用 LangGraph 完全接管当前自研 Tool Calling 循环。
 
-- [ ] 定义 `SomeIpAgentState`，至少包含 messages、intent、entities、tool_trace、
+- [x] 定义 `SomeIpAgentState`，至少包含 messages、intent、entities、tool_trace、
   evidence、draft_answer、reflection、final_answer、status、budget 和 error。
-- [ ] 定义 `SomeIpAgentContext`，注入当前会话、允许访问的会话、模型配置和取消信号。
-- [ ] 实现 `bootstrap` 节点：校验解析会话、问题、模型能力、权限和执行预算。
-- [ ] 实现 `classify` 节点：使用 Structured Output 识别意图、Service/Method/EventGroup、
+- [x] 定义 `SomeIpAgentContext`，注入当前会话、允许访问的会话、模型配置和取消信号。
+- [x] 实现 `bootstrap` 节点：校验解析会话、问题、模型能力、权限和执行预算。
+- [x] 实现 `classify` 节点：使用 Structured Output 识别意图、Service/Method/EventGroup、
   IP、字段路径、时间范围以及是否需要 Tool。
-- [ ] 根据意图动态选择 Tool 子集，避免每轮向模型暴露全部 Tool Schema。
-- [ ] 使用 LangChain `create_agent` 构建 ReAct 子图，负责模型决策、Tool Calling 和 ToolMessage。
-- [ ] 将 ReAct Agent 嵌入外层 `StateGraph`，外层负责确定性前后处理。
-- [ ] 使用条件边处理 direct_answer、use_tools、clarify、partial_failure、cancelled 和 failed。
-- [ ] 对重复 Tool、空结果、错误参数和部分失败建立明确路由。
-- [ ] 设置最大模型轮次、最大 Tool 次数、Tool 总耗时、结果字节和 Token 硬限制。
-- [ ] 将 Tool 证据从消息中抽取为独立 State 字段，避免只能从自然语言恢复证据。
-- [ ] 为每个 Node、Edge 和完整 Graph 增加测试。
+- [x] 根据意图动态选择 Tool 子集，避免每轮向模型暴露全部 Tool Schema。
+- [x] 使用 LangChain `create_agent` 构建 ReAct 子图，负责模型决策、Tool Calling 和 ToolMessage。
+- [x] 将 ReAct Agent 嵌入外层 `StateGraph`，外层负责确定性前后处理。
+- [x] 使用条件边处理 direct_answer、use_tools、clarify、partial_failure、cancelled 和 failed。
+- [x] 对重复 Tool、空结果、错误参数和部分失败建立明确路由。
+- [x] 设置最大模型轮次、最大 Tool 次数、Tool 总耗时、结果字节和 Token 硬限制。
+- [x] 将 Tool 证据从消息中抽取为独立 State 字段，避免只能从自然语言恢复证据。
+- [x] 为每个 Node、Edge 和完整 Graph 增加测试。
 
 验收：新 Graph 能完成无 Tool、单 Tool、多 Tool、参数修复、部分失败和取消场景。
 

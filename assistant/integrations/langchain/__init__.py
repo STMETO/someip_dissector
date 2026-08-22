@@ -6,7 +6,11 @@ from .models import (
     create_chat_model,
     resolve_chat_model_provider,
 )
-from .middleware import someip_tool_middleware
+from .middleware import (
+    repeated_tool_call_middleware,
+    someip_model_budget_middleware,
+    someip_tool_middleware,
+)
 from .tools import (
     LANGCHAIN_TOOL_MAP,
     LANGCHAIN_TOOLS,
@@ -26,6 +30,8 @@ __all__ = [
     "create_chat_model",
     "create_tool_context",
     "get_langchain_tool",
+    "repeated_tool_call_middleware",
     "resolve_chat_model_provider",
+    "someip_model_budget_middleware",
     "someip_tool_middleware",
 ]

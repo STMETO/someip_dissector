@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from enum import Enum
+from typing import Any
 
 
 class AgentRoute(str, Enum):
@@ -16,4 +17,11 @@ class AgentRoute(str, Enum):
     FINISH = "finish"
 
 
-__all__ = ["AgentRoute"]
+def state_route(state: dict[str, Any]) -> str:
+    """读取有限路由值，非法值统一进入 failed，避免 Graph 无目标异常。"""
+    value = str(state.get("route") or AgentRoute.FAILED.value)
+    allowed = {route.value for route in AgentRoute}
+    return value if value in allowed else AgentRoute.FAILED.value
+
+
+__all__ = ["AgentRoute", "state_route"]
