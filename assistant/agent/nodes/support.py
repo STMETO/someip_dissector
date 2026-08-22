@@ -5,7 +5,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
 
-from ..context import SomeIpAgentContext
+from ...integrations.langchain.runtime import SomeIpAgentContext
 
 
 def require_context(runtime: Any) -> SomeIpAgentContext:

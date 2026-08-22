@@ -313,12 +313,239 @@ class SomeIpLangGraphTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertIn("Tool Calling", result["final_answer"])
 
+    def test_complex_answer_passes_structured_reflection(self):
+        classifier = _classifier(
+            "subscription_diagnostic",
+            complexity="complex",
+            answer_kind="diagnosis",
+        )
+        main = _ScriptedChatModel(responses=[
+            _tool_call("get_subscription_status", {}, "call-1"),
+            AIMessage(content="订阅诊断结果正常。"),
+        ])
+        reflection = _reflection_model(passed=True, score=0.96)
+        context = _context(lambda *_args: {"summary": {"service_count": 1}})
 
-def _graph(main: BaseChatModel, classifier: BaseChatModel):
+        result = _graph(
+            main,
+            classifier,
+            reflection_model=reflection,
+        ).invoke(
+            {"messages": [{"role": "user", "content": "生成订阅诊断报告"}]},
+            context=context,
+        )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["reflection_count"], 1)
+        self.assertTrue(result["reflection"]["passed"])
+        self.assertEqual(context.tool_executor.run_record.reflection_scores, [0.96])
+        self.assertEqual(context.tool_executor.run_record.reflection_count, 1)
+
+    def test_reflection_issues_are_revised_once(self):
+        classifier = _classifier(
+            "offer_analysis",
+            complexity="complex",
+            answer_kind="diagnosis",
+        )
+        main = _ScriptedChatModel(responses=[
+            _tool_call("get_offer_timeline", {"service_id": "0x0A01"}, "call-1"),
+            AIMessage(content="服务一定发生了永久故障。"),
+        ])
+        reflection = _reflection_model(
+            passed=False,
+            score=0.45,
+            unsupported_claims=["永久故障没有抓包证据"],
+            revision_instructions=["删除确定性根因，改为抓包观察范围内结论"],
+        )
+        revision = _revision_model("抓包观察范围内未发现后续 Offer，无法确认永久故障。")
+        context = _context(lambda *_args: {"events": [{"service_id": "0x0A01"}]})
+
+        result = _graph(
+            main,
+            classifier,
+            reflection_model=reflection,
+            revision_model=revision,
+        ).invoke(
+            {"messages": [{"role": "user", "content": "诊断 0x0A01 的 Offer 异常"}]},
+            context=context,
+        )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertIn("无法确认永久故障", result["final_answer"])
+        self.assertEqual(result["revision_count"], 1)
+        self.assertEqual(context.tool_executor.run_record.revision_count, 1)
+
+    def test_reflection_can_return_to_react_for_one_supplemental_query(self):
+        classifier = _classifier(
+            "subscription_diagnostic",
+            complexity="complex",
+            answer_kind="report",
+        )
+        main = _ScriptedChatModel(responses=[
+            _tool_call("get_subscription_status", {}, "initial"),
+            AIMessage(content="当前报告缺少异常详情。"),
+            _tool_call(
+                "get_anomaly_details",
+                {"anomaly_type": "offer_conflict"},
+                "supplemental",
+            ),
+            AIMessage(content="补查后确认存在一项 Offer 冲突。"),
+        ])
+        reflection = _reflection_model(
+            passed=False,
+            score=0.6,
+            missing_facts=["需要 Offer 冲突详情"],
+            evidence_gaps=["缺少冲突服务证据"],
+            needs_more_tools=True,
+        )
+        calls = []
+
+        def handler(name, _arguments, _session_id):
+            calls.append(name)
+            if name == "get_anomaly_details":
+                return {"matched_anomaly_count": 1, "anomalies": [{"service_id": "0x0010"}]}
+            return {"summary": {"offer_conflict_service_count": 1}}
+
+        context = _context(handler)
+        result = _graph(
+            main,
+            classifier,
+            reflection_model=reflection,
+        ).invoke(
+            {"messages": [{"role": "user", "content": "生成完整订阅异常报告"}]},
+            context=context,
+        )
+
+        self.assertEqual(calls, ["get_subscription_status", "get_anomaly_details"])
+        self.assertEqual(len(result["tool_trace"]), 2)
+        self.assertEqual(result["supplemental_tool_rounds"], 1)
+        self.assertIn("Offer 冲突", result["final_answer"])
+        self.assertEqual(context.tool_executor.run_record.supplemental_tool_rounds, 1)
+        self.assertEqual(context.tool_executor.run_record.supplemental_tool_call_count, 1)
+
+    def test_reflection_budget_exhaustion_preserves_guarded_draft(self):
+        classifier = _classifier(
+            "subscription_diagnostic",
+            complexity="complex",
+            answer_kind="report",
+        )
+        main = _ScriptedChatModel(responses=[
+            _tool_call("get_subscription_status", {}, "call-1"),
+            AIMessage(content="预算内生成的诊断初稿。"),
+        ])
+        reflection = _reflection_model(passed=True, score=1.0)
+        context = _context(
+            lambda *_args: {"summary": {}},
+            budget=ToolExecutionBudget(max_model_rounds=3),
+        )
+
+        result = _graph(
+            main,
+            classifier,
+            reflection_model=reflection,
+        ).invoke(
+            {"messages": [{"role": "user", "content": "生成诊断报告"}]},
+            context=context,
+        )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["final_answer"], "预算内生成的诊断初稿。")
+        self.assertEqual(reflection.invocation_count, 0)
+        self.assertEqual(
+            context.tool_executor.run_record.reflection_failure_reason,
+            "reflection_budget_exceeded",
+        )
+
+    def test_duplicate_reflection_feedback_stops_second_revision(self):
+        classifier = _classifier(
+            "offer_analysis",
+            complexity="complex",
+            answer_kind="diagnosis",
+        )
+        main = _ScriptedChatModel(responses=[
+            _tool_call("get_offer_timeline", {"service_id": "0x0A01"}, "call-1"),
+            AIMessage(content="初稿。"),
+        ])
+        feedback = {
+            "passed": False,
+            "score": 0.5,
+            "unsupported_claims": ["结论缺少证据"],
+            "revision_instructions": ["收敛结论"],
+        }
+        reflection = _reflection_model(**feedback, copies=2)
+        revision = _revision_model("已收敛的回答。")
+        context = _context(lambda *_args: {"events": [{"service_id": "0x0A01"}]})
+
+        result = _graph(
+            main,
+            classifier,
+            reflection_model=reflection,
+            revision_model=revision,
+            max_reflections=2,
+        ).invoke(
+            {"messages": [{"role": "user", "content": "分析 Offer 根因"}]},
+            context=context,
+        )
+
+        self.assertEqual(result["reflection_count"], 2)
+        self.assertEqual(result["revision_count"], 1)
+        self.assertTrue(any("重复反馈" in item for item in result["warnings"]))
+
+    def test_guard_removes_unverified_navigation_link_without_reflection(self):
+        classifier = _classifier("service_lookup")
+        main = _ScriptedChatModel(responses=[
+            _tool_call("find_service", {"query": "0x0A01"}, "call-1"),
+            AIMessage(content="查看[不存在的报文](#someip-message-999)。"),
+        ])
+        context = _context(
+            lambda *_args: {"matched_service_count": 1, "services": [{"service_id": "0x0A01"}]}
+        )
+
+        result = _graph(main, classifier).invoke(
+            {"messages": [{"role": "user", "content": "查找 0x0A01"}]},
+            context=context,
+        )
+
+        self.assertNotIn("#someip-message-999", result["final_answer"])
+        self.assertIn("不存在的报文", result["final_answer"])
+        self.assertEqual(result["reflection_count"], 0)
+        self.assertEqual(context.tool_executor.run_record.invalid_navigation_link_count, 1)
+
+    def test_model_identity_skips_reflection_even_if_marked_complex(self):
+        classifier = _classifier(
+            "model_identity",
+            requires_tools=False,
+            complexity="complex",
+            answer_kind="report",
+        )
+        main = _ScriptedChatModel(responses=[AIMessage(content="我是当前配置的模型。")])
+        context = _context(lambda *_args: {})
+
+        result = _graph(main, classifier).invoke(
+            {"messages": [{"role": "user", "content": "你是什么模型？"}]},
+            context=context,
+        )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["reflection_count"], 0)
+        self.assertEqual(context.tool_executor.run_record.model_rounds, 2)
+
+
+def _graph(
+    main: BaseChatModel,
+    classifier: BaseChatModel,
+    *,
+    reflection_model: BaseChatModel | None = None,
+    revision_model: BaseChatModel | None = None,
+    max_reflections: int = 1,
+):
     return build_someip_agent_graph(
         main,
         system_prompt="你是测试 SOME/IP 诊断助手，只依据 Tool 结果回答。",
         classifier_model=classifier,
+        reflection_model=reflection_model,
+        revision_model=revision_model,
+        max_reflections=max_reflections,
     )
 
 
@@ -328,6 +555,8 @@ def _classifier(
     requires_tools: bool = True,
     entities: dict[str, Any] | None = None,
     scope: str = "current_session",
+    complexity: str = "simple",
+    answer_kind: str = "lookup",
 ) -> _ScriptedChatModel:
     return _ScriptedChatModel(responses=[AIMessage(
         content="",
@@ -341,8 +570,61 @@ def _classifier(
                 "needs_clarification": False,
                 "clarification_question": None,
                 "scope": scope,
+                "complexity": complexity,
+                "answer_kind": answer_kind,
             },
             "id": "classification-1",
+            "type": "tool_call",
+        }],
+    )])
+
+
+def _reflection_model(
+    *,
+    passed: bool,
+    score: float,
+    missing_facts: list[str] | None = None,
+    unsupported_claims: list[str] | None = None,
+    evidence_gaps: list[str] | None = None,
+    format_issues: list[str] | None = None,
+    revision_instructions: list[str] | None = None,
+    needs_more_tools: bool = False,
+    copies: int = 1,
+) -> _ScriptedChatModel:
+    args = {
+        "passed": passed,
+        "score": score,
+        "missing_facts": missing_facts or [],
+        "unsupported_claims": unsupported_claims or [],
+        "evidence_gaps": evidence_gaps or [],
+        "format_issues": format_issues or [],
+        "revision_instructions": revision_instructions or [],
+        "needs_more_tools": needs_more_tools,
+    }
+    return _ScriptedChatModel(responses=[
+        AIMessage(
+            content="",
+            tool_calls=[{
+                "name": "ReflectionResult",
+                "args": args,
+                "id": f"reflection-{index}",
+                "type": "tool_call",
+            }],
+        )
+        for index in range(copies)
+    ])
+
+
+def _revision_model(answer: str) -> _ScriptedChatModel:
+    return _ScriptedChatModel(responses=[AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "RevisionResult",
+            "args": {
+                "answer": answer,
+                "applied_changes": ["按 Reflection 收敛无依据结论"],
+            },
+            "id": "revision-1",
             "type": "tool_call",
         }],
     )])

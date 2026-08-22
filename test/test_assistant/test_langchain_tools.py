@@ -14,7 +14,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import PrivateAttr, ValidationError
 
-from assistant.agent.context import SomeIpAgentContext
+from assistant.integrations.langchain.runtime import SomeIpAgentContext
 from assistant.execution.run_record import AssistantRunRecord
 from assistant.integrations.langchain import (
     LANGCHAIN_TOOL_MAP,

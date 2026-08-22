@@ -8,16 +8,22 @@ from langchain_core.messages import ToolMessage
 
 from ..routing import AgentRoute
 from ..state import SomeIpAgentState
+from .support import latest_ai_text
 
 
 def collect_evidence_node(state: SomeIpAgentState) -> dict[str, Any]:
     """提取有限证据，确定成功、部分失败、失败或取消路由。"""
-    traces: list[dict[str, Any]] = []
-    evidence: list[dict[str, Any]] = []
-    navigation_links: list[dict[str, Any]] = []
+    # 补充查询再次进入该节点时累加既有证据，不能覆盖第一轮事实。
+    traces: list[dict[str, Any]] = list(state.get("tool_trace", []))
+    evidence: list[dict[str, Any]] = list(state.get("evidence", []))
+    navigation_links: list[dict[str, Any]] = list(state.get("navigation_links", []))
     warnings = list(state.get("warnings", []))
-    statuses: list[str] = []
-    error_codes: list[str] = []
+    statuses: list[str] = [str(item.get("status") or "") for item in traces]
+    error_codes: list[str] = [
+        str(item.get("error_code"))
+        for item in traces
+        if item.get("error_code")
+    ]
 
     for message in state.get("react_messages", []):
         if not isinstance(message, ToolMessage):
@@ -53,6 +59,14 @@ def collect_evidence_node(state: SomeIpAgentState) -> dict[str, Any]:
             )
 
     route = _evidence_route(statuses, error_codes, state.get("route"))
+    if (
+        route == AgentRoute.FAILED
+        and traces
+        and latest_ai_text(state.get("react_messages", []))
+    ):
+        # 模型已经基于失败信封完成回答时保留为部分结果，回答节点会强制追加
+        # “查询限制”；这比丢弃已返回的错误证据并返回泛化 500 更可诊断。
+        route = AgentRoute.PARTIAL_FAILURE
     if not traces and route == AgentRoute.FAILED:
         warnings.append("ReAct 子图没有产生可验证的 Tool 结果。")
     return {

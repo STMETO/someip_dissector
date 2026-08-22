@@ -6,7 +6,7 @@ from typing import Any
 from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.runtime import Runtime
 
-from ..context import SomeIpAgentContext
+from ...integrations.langchain.runtime import SomeIpAgentContext
 from ..routing import AgentRoute
 from ..state import SomeIpAgentState
 from .support import latest_user_question, require_context
@@ -61,6 +61,12 @@ def make_bootstrap_node(model: BaseChatModel):
                 "max_total_result_bytes": budget.max_total_result_bytes,
             },
             "warnings": [],
+            "reflection": None,
+            "reflection_count": 0,
+            "reflection_feedback_hashes": [],
+            "revision_count": 0,
+            "supplemental_tool_rounds": 0,
+            "supplemental_query": None,
         }
 
     return bootstrap_node

@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 import logging
+from threading import Lock
 from time import monotonic
 from typing import Any
 
@@ -53,10 +54,26 @@ class AssistantRunRecord:
     execution_budget: dict[str, int | float] = field(default_factory=dict)
     tool_calls: list[ToolCallRecord] = field(default_factory=list)
     invalid_navigation_link_count: int = 0
+    reflection_count: int = 0
+    reflection_scores: list[float] = field(default_factory=list)
+    reflection_failure_reason: str | None = None
+    revision_count: int = 0
+    supplemental_tool_rounds: int = 0
+    supplemental_tool_call_count: int = 0
+    graph_run_id: str = ""
+    graph_status: str = "running"
+    graph_events: list[dict[str, Any]] = field(default_factory=list)
     error_code: str | None = None
     finished_at: str | None = None
     duration_ms: int = 0
     _started_monotonic: float = field(default_factory=monotonic, repr=False)
+    _tool_call_lock: Lock = field(default_factory=Lock, repr=False)
+
+    def append_tool_call(self, record: ToolCallRecord) -> None:
+        """并发 ToolNode 下原子分配调用序号并追加审计记录。"""
+        with self._tool_call_lock:
+            record.sequence = len(self.tool_calls) + 1
+            self.tool_calls.append(record)
 
     def add_usage(self, value: Any) -> None:
         """合并模型各轮 usage，只接受整数指标。"""
@@ -74,6 +91,17 @@ class AssistantRunRecord:
         self.error_code = error_code
         self.finished_at = _utc_now()
         self.duration_ms = max(0, round((monotonic() - self._started_monotonic) * 1000))
+
+    def add_graph_event(self, node: str, status: str) -> None:
+        """记录脱敏节点轨迹，不保存 State、消息或 Tool 结果正文。"""
+        if len(self.graph_events) >= 128:
+            return
+        self.graph_events.append({
+            "sequence": len(self.graph_events) + 1,
+            "node": str(node)[:256],
+            "status": str(status or "updated")[:64],
+        })
+        self.graph_status = str(status or self.graph_status)[:64]
 
     def to_public_dict(self) -> dict[str, Any]:
         """返回可写日志、可回传前端的脱敏结构。"""
@@ -95,6 +123,16 @@ class AssistantRunRecord:
             "tool_duration_ms": sum(item.duration_ms for item in self.tool_calls),
             "tool_result_bytes": sum(item.result_bytes for item in self.tool_calls),
             "invalid_navigation_link_count": self.invalid_navigation_link_count,
+            "reflection_count": self.reflection_count,
+            "reflection_scores": list(self.reflection_scores),
+            "reflection_failure_reason": self.reflection_failure_reason,
+            "revision_count": self.revision_count,
+            "supplemental_tool_rounds": self.supplemental_tool_rounds,
+            "supplemental_tool_call_count": self.supplemental_tool_call_count,
+            "graph_run_id": self.graph_run_id,
+            "graph_status": self.graph_status,
+            "graph_event_count": len(self.graph_events),
+            "graph_events": [dict(item) for item in self.graph_events],
             "token_usage": dict(self.token_usage),
             "execution_budget": dict(self.execution_budget),
             "error_code": self.error_code,

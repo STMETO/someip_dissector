@@ -1,17 +1,11 @@
-"""AI 助手编排与进程内短期对话上下文。
+"""AI 助手应用服务与进程内短期对话上下文。
 
-本层是整个AI助手业务的核心编排层：
-1. 维护内存里的对话会话历史（进程内，程序重启全部丢失）
-2. 实现工具调用循环：AI → 调用本地工具 → 把工具结果丢回AI，多轮往复
-3. 拼接System提示词、管理历史消息窗口、限制最大工具调用轮次
-4. 对接上层HTTP接口，向下调用config配置模块、provider大模型客户端、tools工具执行模块
-注意：对话默认只保存在内存；用户显式开启保存后才写入解析记录目录。
-会话以 (session_id, conversation_id) 二元组隔离，API Key 和 Tool 原始结果不落盘。
+本层只负责配置、上下文计划、会话持久化和 LangGraph 调用。意图分类、ReAct、Tool
+路由、证据收集、Reflection 与回答发布全部由唯一生产 Graph 编排，不保留旧循环。
 """
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from queue import Empty, Queue
@@ -25,15 +19,11 @@ from utils.logger import get_logger
 
 # 导入前面写好的配置模块
 from ..llm.config import get_model_config, public_config, set_runtime_config
-# 导入大模型客户端，自定义异常
-from ..llm.gateway import ModelProviderError, create_chat_completion, probe_model
-from ..answering.navigation import validate_answer_navigation_links
 from ..conversation.store import (
     load_conversations,
     remove_conversations,
     save_conversations,
 )
-from ..llm.providers import provider_catalog, resolve_provider
 from ..answering.prompts import ANSWER_CONTRACT_VERSION, PROMPT_VERSION, render_system_prompt
 from ..execution.run_record import AssistantRunRecord, log_run_record
 # pydantic请求体模型，接收前端配置提交
@@ -41,12 +31,21 @@ from ..contracts.requests import AssistantConfigRequest
 from ..conversation.context_budget import (
     ContextBudgetError,
     build_context_plan,
-    estimate_request_tokens,
     tokenizer_name,
 )
-# Tool Schema 仍参与模型上下文预算，具体执行交由独立执行器治理。
-from ..tools import TOOL_DEFINITIONS, execute_tool
-from ..execution.tool_executor import ToolExecutionCancelled, ToolExecutor
+from ..tools import TOOL_DEFINITIONS
+# 先加载 Graph 领域入口，再加载 LangChain 汇总包，保持初始化依赖方向稳定。
+from .graph_runtime import AgentGraphExecutionError, run_agent_graph
+from ..integrations.langchain import (
+    ModelFactoryError,
+    ModelRequestError,
+    create_chat_model,
+    create_tool_context,
+    probe_chat_model,
+    provider_catalog,
+    resolve_chat_model_provider,
+)
+from ..integrations.langchain.events import GraphStreamCancelled
 
 
 logger = get_logger(__name__)
@@ -78,24 +77,6 @@ _active_requests: dict[str, tuple[str, Event]] = {}
 _active_requests_lock = Lock()
 ProgressCallback = Callable[[dict[str, Any]], None]
 
-_TOOL_PROGRESS_LABELS = {
-    "get_subscription_status": "正在查询订阅诊断总览",
-    "find_service": "正在查找服务",
-    "get_offer_timeline": "正在查询 Offer 时间线",
-    "get_subscription_timeline": "正在查询订阅时间线",
-    "search_messages": "正在检索报文",
-    "get_message_detail": "正在读取报文详情",
-    "get_notification_statistics": "正在统计 Notification",
-    "get_payload_field": "正在读取 Payload 字段",
-    "get_request_response_trace": "正在关联 Request/Response",
-    "get_ecu_service_topology": "正在构建 ECU 服务拓扑",
-    "get_arxml_definition": "正在查询 ARXML 定义",
-    "search_payload_values": "正在检索 Payload 字段值",
-    "get_anomaly_details": "正在展开诊断异常",
-    "compare_sessions": "正在比较解析记录",
-}
-
-
 class AssistantError(RuntimeError):
     """
     AI助手业务自定义异常。
@@ -114,12 +95,15 @@ def status() -> dict[str, object]:
     """获取当前模型配置状态，对外脱敏接口，直接返回给前端。"""
     config = get_model_config()
     result = public_config(config)
-    provider = resolve_provider(config)
+    provider_name = resolve_chat_model_provider(config)
+    provider = next(
+        item for item in provider_catalog() if item["provider"] == provider_name
+    )
     result.update({
-        "effective_provider": provider.capabilities.provider,
-        "provider_label": provider.capabilities.label,
-        "supports_tools": provider.capabilities.supports_tools,
-        "supports_stream": provider.capabilities.supports_stream,
+        "effective_provider": provider_name,
+        "provider_label": provider["label"],
+        "supports_tools": provider["supports_tools"],
+        "supports_stream": provider["supports_stream"],
         "tokenizer": tokenizer_name(config.model),
         "providers": provider_catalog(),
     })
@@ -155,12 +139,12 @@ def probe() -> dict[str, Any]:
     if not config.configured:
         raise AssistantError("请先配置模型 API Key", 503)
     try:
-        result = probe_model(config)
-    except ModelProviderError as exc:
+        result = probe_chat_model(config)
+    except (ModelFactoryError, ModelRequestError) as exc:
         raise AssistantError(str(exc), 502) from exc
     return {
         **result,
-        "provider": resolve_provider(config).capabilities.provider,
+        "provider": resolve_chat_model_provider(config),
         "model": config.model,
         "context_window": config.context_window,
     }
@@ -203,7 +187,7 @@ def chat(
     comparison_session_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """
-    用户聊天主入口函数。接收用户提问，执行完整对话+工具调用循环，返回回答结果。
+    用户聊天主入口函数。接收用户提问，执行完整 LangGraph，返回回答结果。
     :param session_id: 抓包分析会话ID，绑定打开的pcap抓包文件
     :param question: 用户输入的自然语言提问
     :param conversation_id: 可选，对话ID；None代表新建对话
@@ -225,7 +209,7 @@ def chat(
     )
 
     rid = request_id or uuid4().hex
-    provider_name = resolve_provider(config).capabilities.provider
+    provider_name = resolve_chat_model_provider(config)
     run_record = AssistantRunRecord(
         request_id=rid,
         session_id=session_id,
@@ -248,6 +232,12 @@ def chat(
         )
         run_record.finish("completed")
         result["run"] = run_record.to_public_dict()
+        _notify(progress, {
+            "type": "completed",
+            "request_id": rid,
+            "graph_run_id": run_record.graph_run_id,
+            "status": "completed",
+        })
         return result
     except AssistantCancelled:
         run_record.finish("cancelled", "cancelled")
@@ -322,46 +312,45 @@ def _chat_with_run_record(
             "tokenizer": context.tokenizer,
             "message": "正在分析问题并选择查询工具",
         })
-        used_tools: list[dict[str, Any]] = []
-        executor = ToolExecutor(
-            session_id,
-            run_record,
-            # 白名单由当前 HTTP 请求注入，模型无法通过 Tool 参数扩大访问范围。
-            tool_handler=lambda name, arguments, current_session_id: execute_tool(
-                name,
-                arguments,
-                current_session_id,
-                {item.session_id for item in comparison_states},
-            ),
-            logger=logger,
-        )
+        allowed_session_ids = {item.session_id for item in comparison_states}
         try:
-            answer, verified_links = _run_tool_loop(
-                config,
-                list(context.messages),
-                used_tools,
-                executor,
+            model = create_chat_model(config, require_tools=True)
+            runtime_context = create_tool_context(
+                session_id,
                 run_record,
-                progress,
-                cancel_event,
+                allowed_session_ids=allowed_session_ids,
+                model_config=config,
+                cancel_event=cancel_event,
             )
-        except ToolExecutionCancelled as exc:
+            # build_context_plan 的首条 System Prompt 由 Graph 节点统一注入；较早
+            # 对话摘要仍作为后续 SystemMessage 保留，避免重复注入主提示词。
+            graph_messages = [
+                item for index, item in enumerate(context.messages)
+                if not (index == 0 and item.get("role") == "system")
+            ]
+            graph_result = run_agent_graph(
+                model=model,
+                system_prompt=str(context.messages[0]["content"]),
+                messages=graph_messages,
+                context=runtime_context,
+                run_record=run_record,
+                progress=progress,
+                cancel_event=cancel_event,
+            )
+        except GraphStreamCancelled as exc:
             raise AssistantCancelled("请求已取消") from exc
-        except ModelProviderError as exc:
+        except ModelFactoryError as exc:
+            raise AssistantError(str(exc), 400) from exc
+        except ModelRequestError as exc:
+            raise AssistantError(str(exc), 502) from exc
+        except AgentGraphExecutionError as exc:
             if cancel_event is not None and cancel_event.is_set():
                 raise AssistantCancelled("请求已取消") from exc
             raise AssistantError(str(exc), 502) from exc
 
         _check_cancel(cancel_event)
-        answer, invalid_link_count = validate_answer_navigation_links(
-            answer, verified_links
-        )
-        run_record.invalid_navigation_link_count = invalid_link_count
-        answer, limit_notice_added = _ensure_query_limit_notice(answer, used_tools)
-        if invalid_link_count or limit_notice_added:
-            # 流式预览可能已经收到模型原文，重置后只展示校验后的最终答案。
-            _notify(progress, {"type": "text_reset"})
-            _notify(progress, {"type": "text_delta", "delta": answer})
+        answer = graph_result.answer
+        used_tools = graph_result.tools
 
         with _history_lock:
             next_turn = [
@@ -399,8 +388,8 @@ def chat_stream(
 ) -> Iterator[str]:
     """以 NDJSON 事件流输出工具进度和最终结果。
 
-    模型客户端是同步实现，因此用单独线程执行；生成器每十秒输出一次 heartbeat，
-    防止长时间模型请求被代理误判为空闲连接。同步 ``chat`` 接口继续保留兼容。
+    LangGraph 同步流在单独线程执行；生成器每十秒输出一次 heartbeat，防止长时间
+    模型请求被代理误判为空闲连接。同步 ``chat`` 接口继续保留兼容。
     """
     events: Queue[dict[str, Any] | None] = Queue()
     rid = request_id or uuid4().hex
@@ -632,145 +621,6 @@ def _sanitize_history(value: Any) -> list[dict[str, str]]:
     return result[-200:]
 
 
-def _run_tool_loop(
-    config: Any,
-    messages: list[dict[str, Any]],
-    used_tools: list[dict[str, Any]],
-    executor: ToolExecutor,
-    run_record: AssistantRunRecord,
-    progress: ProgressCallback | None = None,
-    cancel_event: Event | None = None,
-) -> tuple[str, list[dict[str, Any]]]:
-    """
-    【核心工具调用循环】
-    多轮往复：调用大模型 → 如果AI要调用工具，本地执行工具，把tool结果塞回messages，再次请求大模型
-    循环有最大轮次保护，避免AI无限调用工具死循环。
-    :param config: 模型配置
-    :param messages: 完整消息上下文，会在循环中不断追加assistant、tool消息
-    :param used_tools: output参数，记录调用过的工具，回传给前端展示
-    :param executor: 单次问答共享的 Tool 预算执行器
-    :return: AI 最终文本和可验证的导航证据
-    """
-    verified_links: list[dict[str, Any]] = []
-    # 最后一轮必须给模型机会整合 Tool 结果；持续调用 Tool 会被模型轮数预算终止。
-    for _ in range(executor.budget.max_model_rounds):
-        _check_cancel(cancel_event)
-        run_record.model_rounds += 1
-        round_input_tokens = estimate_request_tokens(
-            messages,
-            TOOL_DEFINITIONS,
-            config.model,
-        )
-        if round_input_tokens + config.max_output_tokens + 256 > config.context_window:
-            raise ModelProviderError(
-                "Tool 返回结果使当前请求超过模型上下文窗口，请缩小查询范围或调高上下文配置"
-            )
-        # 每一轮模型请求可能先输出文本再决定调用 Tool，前端以 reset 区分轮次。
-        _notify(progress, {"type": "text_reset"})
-        emitted_text = False
-
-        def on_text_delta(delta: str) -> None:
-            nonlocal emitted_text
-            _check_cancel(cancel_event)
-            emitted_text = True
-            _notify(progress, {"type": "text_delta", "delta": delta})
-
-        model_message = create_chat_completion(
-            config,
-            messages,
-            TOOL_DEFINITIONS,
-            on_text_delta=on_text_delta,
-            cancel_event=cancel_event,
-        )
-        run_record.add_usage(model_message.get("_usage"))
-        tool_calls = model_message.get("tool_calls") or []
-
-        # 没有工具调用，直接拿到最终回答，退出循环返回文本
-        if not tool_calls:
-            content = _message_content(model_message.get("content"))
-            if content:
-                # 关闭流式或兼容接口没有增量时，仍通过统一事件显示完整回答。
-                if not emitted_text:
-                    _notify(progress, {"type": "text_delta", "delta": content})
-                return content, verified_links
-            raise ModelProviderError("模型没有返回可显示的回答")
-
-        # Tool Calling 轮次产生的临时文本不属于最终回答，立即清空预览。
-        _notify(progress, {"type": "text_reset"})
-
-        # AI返回要调用工具，组装assistant消息，追加进上下文
-        assistant_message = {
-            "role": "assistant",
-            "content": model_message.get("content") or "",
-            "tool_calls": tool_calls,
-        }
-        # 兼容DeepSeek reasoning_content思考字段；虽然我们默认关闭思考，但做防御兼容返回
-        if model_message.get("reasoning_content") is not None:
-            assistant_message["reasoning_content"] = model_message["reasoning_content"]
-        messages.append(assistant_message)
-
-        # 遍历每一个工具调用，本地执行工具
-        for call in tool_calls:
-            call_id = str(call.get("id") or uuid4().hex)
-            function = call.get("function") or {}
-            name = str(function.get("name") or "")
-            raw_arguments = function.get("arguments")
-            # 进度事件只展示可安全解析的参数预览；严格校验由 ToolExecutor 统一完成。
-            arguments = _argument_preview(raw_arguments)
-            _notify(progress, {
-                "type": "tool_start",
-                "name": name,
-                "arguments": arguments,
-                "message": _TOOL_PROGRESS_LABELS.get(name, f"正在调用 {name}"),
-            })
-            outcome = executor.execute(name, raw_arguments, cancel_event)
-            _check_cancel(cancel_event)
-            # 记录本次调用的工具，用于前端展示
-            tool_record = {
-                "name": name,
-                "arguments": outcome.arguments,
-                "links": outcome.links,
-                "status": outcome.status,
-                "ok": outcome.ok,
-                "error_code": outcome.error_code,
-                "duration_ms": outcome.duration_ms,
-                "result_bytes": outcome.result_bytes,
-            }
-            used_tools.append(tool_record)
-            verified_links.extend(outcome.verified_links)
-            if outcome.status == "success":
-                completion_label = "完成"
-            elif outcome.status == "partial":
-                completion_label = "部分完成"
-            else:
-                completion_label = "失败"
-            _notify(progress, {
-                "type": "tool_end",
-                "name": name,
-                "arguments": outcome.arguments,
-                "ok": outcome.ok,
-                "status": outcome.status,
-                "error_code": outcome.error_code,
-                "duration_ms": outcome.duration_ms,
-                "message": (
-                    f"{_TOOL_PROGRESS_LABELS.get(name, name).removeprefix('正在')}"
-                    f"{completion_label}"
-                ),
-            })
-            # 将工具执行结果组装tool角色消息，追加到messages，下一轮传给大模型
-            messages.append({
-                "role": "tool",
-                "tool_call_id": call_id,
-                "name": name,
-                "content": outcome.content,
-            })
-
-    # 循环耗尽最大次数，抛出异常
-    raise ModelProviderError(
-        f"模型连续 {executor.budget.max_model_rounds} 轮调用 Tool，已停止以避免循环"
-    )
-
-
 def _check_cancel(cancel_event: Event | None) -> None:
     if cancel_event is not None and cancel_event.is_set():
         raise AssistantCancelled("请求已取消")
@@ -791,55 +641,3 @@ def _notify(
         progress(event)
     except Exception:
         return
-
-
-def _argument_preview(value: Any) -> dict[str, Any]:
-    """
-    兼容解析AI输出的tool调用参数。
-    部分LLM返回arguments是json字符串，部分直接返回dict，统一输出字典。
-    解析失败仅返回空预览，ToolExecutor 仍会把它判定为参数错误。
-    """
-    if isinstance(value, dict):
-        return value
-    if not isinstance(value, str) or not value.strip():
-        return {}
-    try:
-        parsed = json.loads(value)
-        return parsed if isinstance(parsed, dict) else {}
-    except json.JSONDecodeError:
-        return {}
-
-
-def _ensure_query_limit_notice(
-    answer: str,
-    used_tools: list[dict[str, Any]],
-) -> tuple[str, bool]:
-    """部分查询失败时补充确定性的限制说明，避免模型掩盖缺失证据。"""
-    incomplete = [item for item in used_tools if item.get("status") != "success"]
-    if not incomplete or re.search(r"(?m)^#{1,6}\s*查询限制\s*$", answer):
-        return answer, False
-    lines = ["### 查询限制"]
-    for item in incomplete:
-        name = str(item.get("name") or "unknown_tool")
-        code = str(item.get("error_code") or "partial_result")
-        lines.append(f"- `{name}` 未完整完成（`{code}`），相关结论仅基于已返回证据。")
-    return answer.rstrip() + "\n\n" + "\n".join(lines), True
-
-
-def _message_content(content: Any) -> str:
-    """
-    兼容不同模型输出content格式：
-    1.普通字符串；
-    2.多模态数组格式 [{"type":"text","text":"xxx"}]
-    提取文本内容，做清理。
-    """
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        parts = [
-            str(item.get("text", ""))
-            for item in content
-            if isinstance(item, dict) and item.get("type") == "text"
-        ]
-        return "\n".join(part for part in parts if part).strip()
-    return ""

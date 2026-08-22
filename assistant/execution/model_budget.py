@@ -42,7 +42,7 @@ def enforce_model_context_budget(
 ) -> int:
     """估算标准 LangChain 请求并执行上下文窗口硬限制。
 
-    第六阶段会加入动态裁剪和摘要；第三阶段只负责拒绝超限请求，不能静默丢弃
+    第六阶段会加入动态裁剪和摘要；当前生产图只负责拒绝超限请求，不能静默丢弃
     Tool 证据或历史消息。
     """
     config = getattr(context, "model_config", None)

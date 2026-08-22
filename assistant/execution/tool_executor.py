@@ -33,7 +33,8 @@ class ToolExecutionCancelled(RuntimeError):
 class ToolExecutionBudget:
     """单次问答共享的模型与 Tool 硬预算。"""
 
-    max_model_rounds: int = 5
+    # LangGraph 完整链路包含分类、ReAct、Reflection 和可选修订/补查。
+    max_model_rounds: int = 8
     max_tool_calls: int = 12
     single_tool_timeout_seconds: float = 8.0
     cumulative_tool_seconds: float = 30.0
@@ -204,7 +205,7 @@ class ToolExecutor:
             elapsed = monotonic() - started
             self._tool_elapsed_seconds += elapsed
             # 取消仍是一条真实调用，运行记录保留指标，但不把结果继续交给模型。
-            self.run_record.tool_calls.append(ToolCallRecord(
+            self.run_record.append_tool_call(ToolCallRecord(
                 sequence=sequence,
                 name=name,
                 status="cancelled",
@@ -429,7 +430,7 @@ class ToolExecutor:
             original_result_bytes=original_result_bytes,
             error_code=error_code,
         )
-        self.run_record.tool_calls.append(record)
+        self.run_record.append_tool_call(record)
         return ToolExecutionOutcome(
             name=name,
             arguments=arguments,

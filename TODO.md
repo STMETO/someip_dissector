@@ -2,9 +2,9 @@
 
 ## 1. 重构结论
 
-本次不再维护自研 Agent 工作流，也不设计 Legacy/LangGraph 双运行时。直接将 AI 问答
-主链路迁移到 LangChain 1.x 与 LangGraph，现有 `_run_tool_loop`、自研模型消息循环和
-重复的工作流代码在新链路通过回归测试后删除。
+本次不再维护自研 Agent 工作流，也不设计 Legacy/LangGraph 双运行时。AI 问答主链路
+已经迁移到 LangChain 1.x 与 LangGraph；旧 `_run_tool_loop`、自研模型消息循环和重复
+Provider HTTP 实现均已在第五阶段回归通过后删除。
 
 第一批重构先完成框架、Tool Calling、ReAct、Reflection 和 Web 主链路切换；上下文工程、
 短期/长期记忆、Checkpoint 深化、可观测性等能力在主框架稳定后继续建设。
@@ -62,7 +62,7 @@ Structured Answer + Markdown + Navigation
 - 证据链接、Markdown、流式输出和前端页面联动。
 - DeepSeek、OpenAI-compatible 模型配置能力。
 
-需要替换：
+已完成替换：
 
 - `assistant/application/service.py::_run_tool_loop`。
 - 自研 assistant/tool 消息拼装和模型循环终止逻辑。
@@ -155,18 +155,18 @@ Structured Answer + Markdown + Navigation
 Reflection 采用 evaluator-optimizer 模式，不保存或展示模型隐藏思维过程，只保存结构化
 评审结果和修正建议。
 
-- [ ] 定义 `ReflectionResult` Schema：passed、score、missing_facts、unsupported_claims、
+- [x] 定义 `ReflectionResult` Schema：passed、score、missing_facts、unsupported_claims、
   evidence_gaps、format_issues、revision_instructions、needs_more_tools。
-- [ ] 先执行确定性 Guard：Schema、证据 ID、报文索引、Service/EventGroup 和导航链接校验。
-- [ ] 只有复杂诊断、跨会话对比、异常归因和报告类回答进入 LLM Reflection。
-- [ ] 模型身份、配置查询、简单字段读取等低风险回答跳过 Reflection。
-- [ ] Reflection 必须根据用户问题、结构化初稿和本轮证据评审，不能引入新事实。
-- [ ] 若只是表达或结构问题，进入 `revise_answer` 节点修正回答。
-- [ ] 若缺少必要事实且仍有预算，只允许返回 `diagnostic_agent` 补充一次 Tool 查询。
-- [ ] 默认最多一次 Reflection 修正，硬上限两次，达到上限后输出带警告的部分结果。
-- [ ] 防止评审器和生成器互相无限否定；相同反馈不得重复进入修正循环。
-- [ ] 记录 Reflection 次数、评分、失败原因和新增 Tool 次数，不记录隐藏推理文本。
-- [ ] 增加 Reflection 通过、修正、补充 Tool、预算耗尽和循环保护测试。
+- [x] 先执行确定性 Guard：Schema、证据 ID、报文索引、Service/EventGroup 和导航链接校验。
+- [x] 只有复杂诊断、跨会话对比、异常归因和报告类回答进入 LLM Reflection。
+- [x] 模型身份、配置查询、简单字段读取等低风险回答跳过 Reflection。
+- [x] Reflection 必须根据用户问题、结构化初稿和本轮证据评审，不能引入新事实。
+- [x] 若只是表达或结构问题，进入 `revise_answer` 节点修正回答。
+- [x] 若缺少必要事实且仍有预算，只允许返回 `diagnostic_agent` 补充一次 Tool 查询。
+- [x] 默认最多一次 Reflection 修正，硬上限两次，达到上限后输出带警告的部分结果。
+- [x] 防止评审器和生成器互相无限否定；相同反馈不得重复进入修正循环。
+- [x] 记录 Reflection 次数、评分、失败原因和新增 Tool 次数，不记录隐藏推理文本。
+- [x] 增加 Reflection 通过、修正、补充 Tool、预算耗尽和循环保护测试。
 
 验收：固定评测集中，证据覆盖率和无依据结论率优于当前实现，延迟和 Token 增量可量化。
 
@@ -174,17 +174,17 @@ Reflection 采用 evaluator-optimizer 模式，不保存或展示模型隐藏思
 
 目标：新 Graph 成为唯一生产调用链，不保留运行时切换开关。
 
-- [ ] 将 `chat` 和 `chat_stream` 改为调用编译后的 LangGraph。
-- [ ] 使用 LangGraph Stream Events 适配现有 NDJSON：context、tool_start、tool_end、
+- [x] 将 `chat` 和 `chat_stream` 改为调用编译后的 LangGraph。
+- [x] 使用 LangGraph Stream Events 适配现有 NDJSON：context、tool_start、tool_end、
   text_delta、text_reset、completed、cancelled、error。
-- [ ] 保持现有 FastAPI 路由、请求参数和前端返回字段兼容。
-- [ ] 将 LangGraph run_id、node、sequence 和状态加入脱敏运行记录。
-- [ ] 将现有请求取消信号接入 Graph、模型和 Tool 节点。
-- [ ] 使用完整固定评测集和真实 PCAP/ARXML 执行回归。
-- [ ] 删除 `_run_tool_loop` 及只为旧循环服务的消息拼装代码。
-- [ ] 删除自研 Provider HTTP 调用和已被 ChatModel 替代的重复代码。
-- [ ] 清理失效测试，保留并迁移所有行为测试。
-- [ ] 更新 README 的目录树、调用链、配置和 Agent Graph 图。
+- [x] 保持现有 FastAPI 路由、请求参数和前端返回字段兼容。
+- [x] 将 LangGraph run_id、node、sequence 和状态加入脱敏运行记录。
+- [x] 将现有请求取消信号接入 Graph、模型和 Tool 节点。
+- [x] 使用完整固定评测集和真实 PCAP/ARXML 执行回归。
+- [x] 删除 `_run_tool_loop` 及只为旧循环服务的消息拼装代码。
+- [x] 删除自研 Provider HTTP 调用和已被 ChatModel 替代的重复代码。
+- [x] 清理失效测试，保留并迁移所有行为测试。
+- [x] 更新 README 的目录树、调用链、配置和 Agent Graph 图。
 
 验收：Web AI 助手只运行 LangGraph，现有对话、Tool 进度、取消和证据跳转功能不回退。
 
@@ -282,10 +282,10 @@ Reflection 采用 evaluator-optimizer 模式，不保存或展示模型隐藏思
 
 ## 16. 禁止事项
 
-- [ ] 不保留 Legacy/LangGraph 运行时切换，迁移完成后旧循环必须删除。
-- [ ] 不把 SOME/IP 查询实现复制到 Graph Node、Prompt 或 Tool Adapter。
-- [ ] 不让模型直接访问文件系统、Shell、数据库连接、API Key 或未授权会话。
-- [ ] 不把完整 PCAP、ARXML 或反序列化 JSON 放入 Graph State 或模型上下文。
-- [ ] Reflection 不输出、不持久化模型隐藏思维过程，只保留结构化评审结果。
-- [ ] Reflection 必须有限次、可中止并受 Token/时间预算控制。
-- [ ] 当前不引入 RAG、多 Agent、Supervisor、GraphRAG 和自动长期记忆。
+- 不保留 Legacy/LangGraph 运行时切换，迁移完成后旧循环必须删除。
+- 不把 SOME/IP 查询实现复制到 Graph Node、Prompt 或 Tool Adapter。
+- 不让模型直接访问文件系统、Shell、数据库连接、API Key 或未授权会话。
+- 不把完整 PCAP、ARXML 或反序列化 JSON 放入 Graph State 或模型上下文。
+- Reflection 不输出、不持久化模型隐藏思维过程，只保留结构化评审结果。
+- Reflection 必须有限次、可中止并受 Token/时间预算控制。
+- 当前不引入 RAG、多 Agent、Supervisor、GraphRAG 和自动长期记忆。

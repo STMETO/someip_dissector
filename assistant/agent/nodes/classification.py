@@ -13,7 +13,7 @@ from ...execution.model_budget import (
     enforce_model_context_budget,
     reserve_model_round,
 )
-from ..context import SomeIpAgentContext
+from ...integrations.langchain.runtime import SomeIpAgentContext
 from ..intent import (
     IntentClassification,
     SomeIpIntent,
@@ -29,7 +29,9 @@ _CLASSIFIER_PROMPT = """你是 SOME/IP 诊断问题分类器，只返回给定 S
 识别用户意图以及 Service、Method/Event、EventGroup、Instance、message_index、ECU/IP、
 Payload 字段路径、时间范围和跨会话范围。涉及当前抓包事实时 requires_tools 必须为 true；
 模型身份、能力介绍、普通问候或纯协议概念可以为 false。信息确实不足以形成有效 Tool
-参数时设置 needs_clarification，并给出一个简短澄清问题。不得输出 Tool 名称。"""
+参数时设置 needs_clarification，并给出一个简短澄清问题。不得输出 Tool 名称。
+如果问题要求综合总结、异常诊断、根因分析或跨会话报告，将 complexity 设为 complex，
+并把 answer_kind 设为 diagnosis 或 report；单字段读取和普通检索保持 simple/lookup。"""
 
 
 def make_classification_node(model: BaseChatModel) -> Callable[..., dict[str, Any]]:

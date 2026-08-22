@@ -12,6 +12,8 @@ class AgentRoute(str, Enum):
     USE_TOOLS = "use_tools"
     CLARIFY = "clarify"
     PARTIAL_FAILURE = "partial_failure"
+    REFLECT = "reflect"
+    REVISE = "revise"
     CANCELLED = "cancelled"
     FAILED = "failed"
     FINISH = "finish"

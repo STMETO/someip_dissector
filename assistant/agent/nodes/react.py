@@ -8,6 +8,7 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import ToolCallLimitMiddleware
 from langchain.agents.middleware.tool_call_limit import ToolCallLimitExceededError
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import HumanMessage
 from langgraph.runtime import Runtime
 
 from ...execution.model_budget import (
@@ -20,7 +21,7 @@ from ...integrations.langchain import (
     someip_model_budget_middleware,
     someip_tool_middleware,
 )
-from ..context import SomeIpAgentContext
+from ...integrations.langchain.runtime import SomeIpAgentContext
 from ..routing import AgentRoute
 from ..state import SomeIpAgentState
 from .support import require_context
@@ -85,9 +86,15 @@ def make_react_node(
                 agents[cache_key] = agent
 
         input_messages = list(state.get("messages", []))
+        supplemental_query = str(state.get("supplemental_query") or "").strip()
+        tool_count_before = len(executor.run_record.tool_calls)
+        agent_input = list(input_messages)
+        if supplemental_query:
+            # 补查指令只作为本次 ReAct 的局部输入，不伪装成用户历史写入 Checkpoint。
+            agent_input.append(HumanMessage(content=supplemental_query))
         try:
             result = agent.invoke(
-                {"messages": input_messages},
+                {"messages": agent_input},
                 context=context,
                 config={"recursion_limit": 2 * executor.budget.max_model_rounds + 8},
             )
@@ -106,7 +113,12 @@ def make_react_node(
                 "react_agent_error",
             )
 
-        generated = list(result.get("messages", []))[len(input_messages):]
+        generated = list(result.get("messages", []))[len(agent_input):]
+        if supplemental_query:
+            executor.run_record.supplemental_tool_call_count += max(
+                0,
+                len(executor.run_record.tool_calls) - tool_count_before,
+            )
         route = (
             AgentRoute.CANCELLED
             if context.cancel_event is not None and context.cancel_event.is_set()
@@ -118,6 +130,7 @@ def make_react_node(
             "route": route.value,
             "status": "agent_completed",
             "error": None,
+            "supplemental_query": None,
         }
 
     return diagnostic_agent_node

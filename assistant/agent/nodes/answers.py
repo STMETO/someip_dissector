@@ -13,7 +13,7 @@ from ...execution.model_budget import (
     enforce_model_context_budget,
     reserve_model_round,
 )
-from ..context import SomeIpAgentContext
+from ...integrations.langchain.runtime import SomeIpAgentContext
 from ..intent import SomeIpIntent
 from ..routing import AgentRoute
 from ..state import SomeIpAgentState
@@ -97,7 +97,7 @@ def draft_answer_node(state: SomeIpAgentState) -> dict[str, Any]:
 
 
 def finish_node(state: SomeIpAgentState) -> dict[str, Any]:
-    """第三阶段直接发布初稿；第四阶段会在此前插入 Reflection。"""
+    """发布经过确定性 Guard 及可选 Reflection 的最终回答。"""
     answer = str(state.get("draft_answer") or "").strip()
     if not answer:
         return _failed("没有可发布的回答", "empty_final_answer")

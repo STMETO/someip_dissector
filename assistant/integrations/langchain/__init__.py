@@ -3,7 +3,10 @@
 from .models import (
     ModelCapabilityError,
     ModelFactoryError,
+    ModelRequestError,
     create_chat_model,
+    probe_chat_model,
+    provider_catalog,
     resolve_chat_model_provider,
 )
 from .middleware import (
@@ -23,6 +26,7 @@ from .tools import (
 __all__ = [
     "ModelCapabilityError",
     "ModelFactoryError",
+    "ModelRequestError",
     "LANGCHAIN_TOOL_MAP",
     "LANGCHAIN_TOOLS",
     "ToolRuntimeConfigurationError",
@@ -30,6 +34,8 @@ __all__ = [
     "create_chat_model",
     "create_tool_context",
     "get_langchain_tool",
+    "probe_chat_model",
+    "provider_catalog",
     "repeated_tool_call_middleware",
     "resolve_chat_model_provider",
     "someip_model_budget_middleware",

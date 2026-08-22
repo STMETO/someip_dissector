@@ -5,7 +5,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from .context import SomeIpAgentContext
+from ..integrations.langchain.runtime import SomeIpAgentContext
 from .nodes import (
     cancelled_node,
     clarify_node,
@@ -15,8 +15,11 @@ from .nodes import (
     finish_node,
     make_classification_node,
     make_bootstrap_node,
+    make_deterministic_guard_node,
     make_direct_answer_node,
     make_react_node,
+    make_reflection_node,
+    make_revision_node,
 )
 from .routing import AgentRoute, state_route
 from .state import SomeIpAgentState
@@ -46,12 +49,17 @@ def build_someip_agent_graph(
     system_prompt: str,
     classifier_model: BaseChatModel | None = None,
     direct_answer_model: BaseChatModel | None = None,
+    reflection_model: BaseChatModel | None = None,
+    revision_model: BaseChatModel | None = None,
+    max_reflections: int = 1,
 ) -> CompiledStateGraph:
     """构建外层确定性流程和内层受限 ReAct 子图。
 
-    第三阶段仅提供可独立调用的 Graph，不切换 FastAPI 生产入口。第五阶段完成流式
-    事件适配和回归后，Web 才会删除旧 `_run_tool_loop`。
+    该图是 Web 同步与流式问答的唯一生产编排：外层负责确定性流程、Guard 和
+    Reflection，内层使用受预算约束的 ReAct Agent 执行领域 Tool。
     """
+    if not 1 <= max_reflections <= 2:
+        raise ValueError("max_reflections 必须在 1 到 2 之间")
     builder = StateGraph(SomeIpAgentState, context_schema=SomeIpAgentContext)
     builder.add_node("bootstrap", make_bootstrap_node(model))
     builder.add_node(
@@ -69,6 +77,21 @@ def build_someip_agent_graph(
     )
     builder.add_node("clarify", clarify_node)
     builder.add_node("draft_answer", draft_answer_node)
+    builder.add_node(
+        "deterministic_guard",
+        make_deterministic_guard_node(max_reflections),
+    )
+    builder.add_node(
+        "reflect_answer",
+        make_reflection_node(
+            reflection_model or model,
+            max_reflections=max_reflections,
+        ),
+    )
+    builder.add_node(
+        "revise_answer",
+        make_revision_node(revision_model or model),
+    )
     builder.add_node("finish", finish_node)
     builder.add_node("cancelled", cancelled_node)
     builder.add_node("failed", failed_node)
@@ -117,7 +140,7 @@ def build_someip_agent_graph(
         "direct_answer",
         state_route,
         {
-            AgentRoute.FINISH.value: "finish",
+            AgentRoute.FINISH.value: "deterministic_guard",
             AgentRoute.FAILED.value: "failed",
         },
     )
@@ -126,10 +149,32 @@ def build_someip_agent_graph(
         "draft_answer",
         state_route,
         {
-            AgentRoute.FINISH.value: "finish",
+            AgentRoute.FINISH.value: "deterministic_guard",
             AgentRoute.FAILED.value: "failed",
         },
     )
+    builder.add_conditional_edges(
+        "deterministic_guard",
+        state_route,
+        {
+            AgentRoute.REFLECT.value: "reflect_answer",
+            AgentRoute.FINISH.value: "finish",
+            AgentRoute.CANCELLED.value: "cancelled",
+            AgentRoute.FAILED.value: "failed",
+        },
+    )
+    builder.add_conditional_edges(
+        "reflect_answer",
+        state_route,
+        {
+            AgentRoute.USE_TOOLS.value: "diagnostic_agent",
+            AgentRoute.REVISE.value: "revise_answer",
+            AgentRoute.FINISH.value: "finish",
+            AgentRoute.CANCELLED.value: "cancelled",
+            AgentRoute.FAILED.value: "failed",
+        },
+    )
+    builder.add_edge("revise_answer", "deterministic_guard")
     builder.add_edge("finish", END)
     builder.add_edge("cancelled", END)
     builder.add_edge("failed", END)

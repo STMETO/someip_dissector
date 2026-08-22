@@ -11,7 +11,7 @@ from langchain.tools import ToolRuntime
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import create_model
 
-from ...agent.context import SomeIpAgentContext
+from .runtime import SomeIpAgentContext
 from ...execution.run_record import AssistantRunRecord
 from ...execution.tool_executor import (
     ToolExecutionBudget,

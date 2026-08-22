@@ -68,6 +68,8 @@ class IntentClassification(BaseModel):
     needs_clarification: bool = False
     clarification_question: str | None = Field(default=None, max_length=500)
     scope: Literal["current_session", "cross_session"] = "current_session"
+    complexity: Literal["simple", "complex"] = "simple"
+    answer_kind: Literal["lookup", "diagnosis", "report", "explanation"] = "lookup"
 
     @model_validator(mode="after")
     def validate_clarification(self) -> Self:

@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from pydantic import ValidationError
 
 from ...execution.tool_executor import ToolExecutionCancelled
+from ...execution.run_record import ToolCallRecord
 from ...execution.model_budget import enforce_model_context_budget, reserve_model_round
 from .tool_results import build_tool_error_response
 from .tool_schemas import TOOL_ARGS_SCHEMAS
@@ -47,6 +48,7 @@ def repeated_tool_call_middleware(request: Any, handler: Callable[[Any], Any]) -
             str(call.get("id") or "unknown"),
             "duplicate_tool_call",
             "相同 Tool 和参数已连续重复，调用被停止；请调整查询条件或基于现有证据回答",
+            getattr(request.runtime, "context", None),
         )
     return handler(request)
 
@@ -61,6 +63,7 @@ def someip_tool_middleware(request: Any, handler: Callable[[Any], Any]) -> Any:
     tool_call = request.tool_call
     tool_name = str(tool_call.get("name") or "unknown")
     tool_call_id = str(tool_call.get("id") or "unknown")
+    context = getattr(request.runtime, "context", None)
     try:
         if request.tool is None:
             return _error_message(
@@ -68,8 +71,8 @@ def someip_tool_middleware(request: Any, handler: Callable[[Any], Any]) -> Any:
                 tool_call_id,
                 "unknown_tool",
                 f"未知 Tool: {tool_name}",
+                context,
             )
-        context = getattr(request.runtime, "context", None)
         cancel_event = getattr(context, "cancel_event", None)
         if cancel_event is not None and cancel_event.is_set():
             return _error_message(
@@ -77,6 +80,7 @@ def someip_tool_middleware(request: Any, handler: Callable[[Any], Any]) -> Any:
                 tool_call_id,
                 "cancelled",
                 "用户已取消本次问答",
+                context,
             )
         # ToolNode 默认会先吞掉 Pydantic 异常再生成自由文本。这里提前校验，才能
         # 保证所有失败也遵守统一 JSON 信封，并且不把模型原始参数回显到上下文。
@@ -92,7 +96,7 @@ def someip_tool_middleware(request: Any, handler: Callable[[Any], Any]) -> Any:
                     else "tool_framework_error"
                 )
                 message = "用户已取消本次问答" if code == "cancelled" else "Tool 调用未完成"
-                return _error_message(tool_name, tool_call_id, code, message)
+                return _error_message(tool_name, tool_call_id, code, message, context)
             execution = (
                 response.artifact.get("execution", {})
                 if isinstance(response.artifact, dict)
@@ -107,7 +111,9 @@ def someip_tool_middleware(request: Any, handler: Callable[[Any], Any]) -> Any:
         raise
     except ValidationError as exc:
         details = _validation_message(exc)
-        return _error_message(tool_name, tool_call_id, "invalid_arguments", details)
+        return _error_message(
+            tool_name, tool_call_id, "invalid_arguments", details, context
+        )
     except (TypeError, ValueError) as exc:
         # 参数错误可以反馈给模型修正，但不回传调用栈和内部对象。
         return _error_message(
@@ -115,6 +121,7 @@ def someip_tool_middleware(request: Any, handler: Callable[[Any], Any]) -> Any:
             tool_call_id,
             "invalid_arguments",
             str(exc)[:1000] or "Tool 参数无效",
+            context,
         )
     except Exception:
         return _error_message(
@@ -122,6 +129,7 @@ def someip_tool_middleware(request: Any, handler: Callable[[Any], Any]) -> Any:
             tool_call_id,
             "tool_framework_error",
             "Tool 调用框架发生内部错误",
+            context,
         )
 
 
@@ -130,8 +138,27 @@ def _error_message(
     tool_call_id: str,
     code: str,
     message: str,
+    context: Any = None,
 ) -> ToolMessage:
     content, artifact = build_tool_error_response(tool_name, code, message)
+    result_bytes = len(content.encode("utf-8"))
+    artifact["execution"].update({
+        "duration_ms": 0,
+        "result_bytes": result_bytes,
+        "original_result_bytes": 0,
+    })
+    executor = getattr(context, "tool_executor", None)
+    if executor is not None:
+        record = executor.run_record
+        record.append_tool_call(ToolCallRecord(
+            sequence=0,
+            name=tool_name,
+            status="failed",
+            duration_ms=0,
+            result_bytes=result_bytes,
+            original_result_bytes=0,
+            error_code=code,
+        ))
     return ToolMessage(
         content=content,
         tool_call_id=tool_call_id,

@@ -1,12 +1,8 @@
-"""模型配置、调用门面和供应商适配器。"""
+"""模型运行配置；实际调用统一由 LangChain 集成层完成。"""
 
 from .config import ModelConfig, get_model_config
-from .gateway import ModelProviderError, create_chat_completion, probe_model
 
 __all__ = [
     "ModelConfig",
-    "ModelProviderError",
-    "create_chat_completion",
     "get_model_config",
-    "probe_model",
 ]

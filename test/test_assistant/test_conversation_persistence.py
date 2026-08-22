@@ -8,6 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from langchain_core.messages import AIMessage
+
 from assistant.llm.config import ModelConfig
 from assistant.application.service import (
     chat,
@@ -16,6 +18,7 @@ from assistant.application.service import (
     conversation_overview,
     set_conversation_persistence,
 )
+from test.test_assistant.fakes import ScriptedChatModel, classification_message
 
 
 class ConversationPersistenceTests(unittest.TestCase):
@@ -42,21 +45,21 @@ class ConversationPersistenceTests(unittest.TestCase):
         clear_all_conversations()
         self.temp.cleanup()
 
-    @patch("assistant.application.service.create_chat_completion")
+    @patch("assistant.application.service.create_chat_model")
     @patch("assistant.application.service.get_model_config")
     @patch("assistant.application.service.get_session")
     def test_enabled_conversation_is_saved_and_restored_without_api_key(
         self,
         mocked_session,
         mocked_config,
-        mocked_completion,
+        mocked_model,
     ):
         mocked_session.return_value = self.state
         mocked_config.return_value = self.config
-        mocked_completion.return_value = {
-            "role": "assistant",
-            "content": "这是回答。",
-        }
+        mocked_model.return_value = ScriptedChatModel(responses=[
+            classification_message("model_identity", requires_tools=False),
+            AIMessage(content="这是回答。"),
+        ])
 
         set_conversation_persistence(self.state.session_id, True)
         result = chat(self.state.session_id, "这是问题。")
